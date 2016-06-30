@@ -44,7 +44,7 @@ message networks - for example, our public RabbitMQ instance,
 adapter, the [rabbitmq-xmpp][] plugin, and a bunch of our other
 experimental stuff, so you can do things like this:
 
-<img src="http://github.com/tonyg/rabbithub/raw/master/doc/rabbithub-example.png" alt="RabbitHub example configuration"/>
+<img src="https://raw.githubusercontent.com/tonyg/rabbithub/master/doc/rabbithub-example.png" alt="RabbitHub example configuration"/>
 
  - become XMPP friends with `pshb@dev.rabbitmq.com` (the XMPP adapter
    gives each exchange a JID of its own)
@@ -117,6 +117,127 @@ If RabbitHub is being used behind a firewall, it may be necessary to route HTTP(
 
 Note that proxy server support is only available in RabbitHub for RabbitMQ 3.2.1 or higher.
 
+## Cluster Support
+
+RabbitHub now creates copies of its 3 mnesia tables across all nodes of a cluster for enhance cluster failover ability.
+
+ - rabbithub_lease (disc_copy)
+ - rabbithub_subscription_pid (ram_copy)
+ - rabbithub_subscription_err (ram_copy)
+
+RabbitHub consumers are now created with Consumer Tag format
+
+   amq.http.consumer.*localservername*-AhKV3L3eH2gZbrF79v2kig
+   
+   where the localservername is the server name of the rabbitmq cluster node on which the consumer was created
+   
+## RabbitHub APIs
+
+### VHOST Support
+
+RabbitHub supports publishing and subscribing to vhosts by adding the vhost name to the url prior to the resource.  Not adding the vhost to the path defaults to the default vhost '/'.
+For exmaple:
+
+- http://localhost:15670/testvhost/endpoint/x/xFoo
+
+### Headers Exchange Support
+It is now possible to publish message headers for use with Headers exchanges. 
+This is done with a custom HTTP header 'x-rabbithub-msg_header' sent with the publishing of a message to RabbitHub.
+The format of the values is a comma delimited list of key=value pairs.  Each key/value pair will be converted to
+a rabbitmq message properties used by headers exchanges for routing messages to queues.
+
+'''
+  x-rabbithub-msg_header:keya = valueA,keyb = valueB
+'''
+
+### List of Subscribers
+The following api will return a json formatted list of the current subscribers for RabbitHub.
+
+
+  
+- resource:  vhost
+ - queue:  queue name
+ - topic:  routing key from hub.topic parameter
+ - callback:  url of callback subscriber
+ - lease_expiry_time_microsec: date time of subscription expiration in microseconds- http://localhost:15670/subscriptions   
+ 
+'''javascript
+[{
+	"resource": "/",
+	"queue": "foo2",
+	"topic": "foo2",
+	"callback": "http://localhost:8999/rest/testsubscriber2",
+	"lease_expiry_time_microsec": 4620923686910449
+}, {
+	"resource": "/",
+	"queue": "foo1",
+	"topic": "foo1",
+	"callback": "http://localhost:8999/rest/testsubscriber1",
+	"lease_expiry_time_microsec": 4620919374000198
+}]
+'''
+ 
+## RabbitHub HTTP Post to Subscriber Error Management
+Two new rabbithub environment parameters are now available to control what happens when a HTTP POST to a consumer fails.
+The following parameters can be defined in the `rabbitmq.config` file
+These are set in the rabbitmq.config file as illustrated below
+
+ * `requeue_on_http_post_error` = (true, false)
+ ..* true:  will not requeue, message may be lost
+ ..* false: will requeue, best utilized when queue has a dead-letter-exchange configured
+ * `unsubscribe_on_http_post_error_limit` = integer
+ ..* Integer value is how many errors are allowed prior to the consumer being unsubscribed
+ * `unsubscribe_on_http_post_error_timeout_microseconds` = microseconds
+ ..* Time interval where unsubscribe_on_http_post_error_limit errors are allowed to happen prior to unsubscribing the consumer
+ 
+NOTE: 'unsubscribe_on_http_post_error_limit' and `unsubscribe_on_http_post_error_timeout_microseconds` must be set as a pair as it designates that
+ `unsubscribe_on_http_post_error_limit` may occur within `unsubscribe_on_http_post_error_timeout_microseconds` time interval before the consumer is unsubscribed.
+ 
+'''
+[
+
+ {rabbithub, [        
+	{requeue_on_http_post_error, false},
+	{unsubscribe_on_http_post_error_limit, 5},
+	{unsubscribe_on_http_post_error_timeout_microseconds, 60000000}	
+    ]}
+].
+'''
+ 
+These errors are tracked per subscriber and re-subscribing will reset the error tracking for that subscriber.
+
+To help understand how many errors have occured the following rest endpoint returns a list of all error counts currently being tracked.
+
+- http://localhost:15670/subscriptions/errors   
+
+ - resource:  vhost
+ - queue:  queue name
+ - topic:  routing key from hub.topic parameter
+ - callback:  url of callback subscriber
+ - error_count: number of HTTP POST errors for this subscriber since the first_error_time_microsec
+ - first_error_time_microsec:  time in microseconds for the first error in this interval
+ - last_error_time_microsec:  time in microseconds of the last error that occurred 
+
+'''javascript
+[{
+	"resource": "/",
+	"queue": "foo2",
+	"topic": "foo2",
+	"callback": "http://localhost:8999/rest/testsubscriber2",
+	"error_count": 1,
+	"first_error_time_microsec": 1467326540248893,
+	"last_error_time_microsec": 1467326540248893
+}, {
+	"resource": "/",
+	"queue": "foo1",
+	"topic": "foo1",
+	"callback": "http://localhost:8999/rest/testsubscriber1",
+	"error_count": 2,
+	"first_error_time_microsec": 1467326520609017,
+	"last_error_time_microsec": 1467326522694452
+}]
+'''
+ 
 ## Software License
 
 RabbitHub is [open-source](http://www.opensource.org/) code, licensed
