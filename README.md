@@ -161,7 +161,7 @@ The following api will return a json formatted list of the current subscribers f
  - callback:  url of callback subscriber
  - lease_expiry_time_microsec: date time of subscription expiration in microseconds- http://localhost:15670/subscriptions   
  
-'''javascript
+```javascript
 [{
 	"resource": "/",
 	"queue": "foo2",
@@ -175,7 +175,7 @@ The following api will return a json formatted list of the current subscribers f
 	"callback": "http://localhost:8999/rest/testsubscriber1",
 	"lease_expiry_time_microsec": 4620919374000198
 }]
-'''
+```
  
 ## RabbitHub HTTP Post to Subscriber Error Management
 Two new rabbithub environment parameters are now available to control what happens when a HTTP POST to a consumer fails.
@@ -193,7 +193,7 @@ These are set in the rabbitmq.config file as illustrated below
 NOTE: 'unsubscribe_on_http_post_error_limit' and `unsubscribe_on_http_post_error_timeout_microseconds` must be set as a pair as it designates that
  `unsubscribe_on_http_post_error_limit` may occur within `unsubscribe_on_http_post_error_timeout_microseconds` time interval before the consumer is unsubscribed.
  
-'''
+```
 [
 
  {rabbithub, [        
@@ -202,7 +202,7 @@ NOTE: 'unsubscribe_on_http_post_error_limit' and `unsubscribe_on_http_post_error
 	{unsubscribe_on_http_post_error_timeout_microseconds, 60000000}	
     ]}
 ].
-'''
+```
  
 These errors are tracked per subscriber and re-subscribing will reset the error tracking for that subscriber.
 
@@ -218,7 +218,7 @@ To help understand how many errors have occured the following rest endpoint retu
  - first_error_time_microsec:  time in microseconds for the first error in this interval
  - last_error_time_microsec:  time in microseconds of the last error that occurred 
 
-'''javascript
+```javascript
 [{
 	"resource": "/",
 	"queue": "foo2",
@@ -236,7 +236,7 @@ To help understand how many errors have occured the following rest endpoint retu
 	"first_error_time_microsec": 1467326520609017,
 	"last_error_time_microsec": 1467326522694452
 }]
-'''
+```
  
 ## Software License
 
