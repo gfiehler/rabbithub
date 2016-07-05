@@ -125,11 +125,18 @@ RabbitHub now creates copies of its 3 mnesia tables across all nodes of a cluste
  - rabbithub_subscription_pid (ram_copy)
  - rabbithub_subscription_err (ram_copy)
 
-RabbitHub consumers are now created with Consumer Tag format
+RabbitHub consumers can now created with Consumer Tag format
 
-   amq.http.consumer.*localservername*-AhKV3L3eH2gZbrF79v2kig
+	 amq.http.consumer.*localservername*-AhKV3L3eH2gZbrF79v2kig
+	 
+   where the localservername is the server name of the rabbitmq cluster node on which the consumer was created by setting RabbitHub environment variable include_servername_in_consumer_tag to true.     
    
-   where the localservername is the server name of the rabbitmq cluster node on which the consumer was created
+   By not setting this variable the backwards compatible consumer tag of
+   
+     amq.http.consumer-AhKV3L3eH2gZbrF79v2kig
+	 
+  will be used.  An example can of setting this variable can be found in the test folder in the file:  rabbitmq.config.consumertag.
+      
    
 ## RabbitHub APIs
 
@@ -203,6 +210,7 @@ NOTE: 'unsubscribe_on_http_post_error_limit' and `unsubscribe_on_http_post_error
     ]}
 ].
 ```
+Note:  an example of this configuration can be found in the test folder in file:  rabbitmq.config.errormanagement.
  
 These errors are tracked per subscriber and re-subscribing will reset the error tracking for that subscriber.
 
