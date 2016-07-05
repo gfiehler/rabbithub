@@ -129,7 +129,7 @@ RabbitHub consumers can now created with Consumer Tag format
 
 	 amq.http.consumer.*localservername*-AhKV3L3eH2gZbrF79v2kig
 	 
-   where the localservername is the server name of the rabbitmq cluster node on which the consumer was created by setting RabbitHub environment variable include_servername_in_consumer_tag to true.     
+   where the localservername is the server name of the rabbitmq cluster node on which the consumer was created by setting RabbitHub environment variable `include_servername_in_consumer_tag` to true.     
    
    By not setting this variable the backwards compatible consumer tag of
    
