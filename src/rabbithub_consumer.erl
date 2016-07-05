@@ -23,14 +23,21 @@ init([Lease = #rabbithub_lease{subscription = Subscription}]) ->
     end.
 
 really_init(Subscription = #rabbithub_subscription{resource = Resource}) ->   
-    %% create consumer tag prefix with local node server name
+    %% if environment variable include_servername_in_consumer_tag is true
+    %% create consumer tag prefix with local node server name    
     Node = node(),
-    NodeTemp = io_lib:format("~p",[Node]),
-    NodeString = lists:flatten(NodeTemp),
-    %% strip single quotes of ends in case the node name has special characters or capitol letters
-    NodeStringStripped = string:strip(NodeString, both, $'),
-    Server = string:sub_word(NodeStringStripped, 2, $@),
-    Prefix = "amq.http.consumer." ++ Server,
+    case application:get_env(rabbithub, include_servername_in_consumer_tag) of
+        {ok, true} ->            
+            NodeTemp = io_lib:format("~p",[Node]),
+            NodeString = lists:flatten(NodeTemp),
+            %% since node name is an atom, strip single quotes of ends in case 
+            %%  the node name has special characters or capitol letters
+            NodeStringStripped = string:strip(NodeString, both, $'),
+            Server = string:sub_word(NodeStringStripped, 2, $@),
+            Prefix = "amq.http.consumer." ++ Server;
+        _ ->
+            Prefix = "amq.http.consumer"
+    end,
     
     case rabbit_amqqueue:lookup(Resource) of
         {ok, Q = #amqqueue{pid = QPid}} ->
@@ -175,7 +182,7 @@ register_subscription_err(Subscription, ErrorLimit, ErrorTimeout) ->
                           case ErrorLimit of
                             0 ->                                
                                 unsubscribe;
-                            EL ->                                
+                            _EL ->                                
                                 do_not_unsubscribe
                           end;
                       [ExistingRecord =
@@ -193,7 +200,7 @@ register_subscription_err(Subscription, ErrorLimit, ErrorTimeout) ->
                                   case ErrorLimit of
                                     0 ->                                        
                                         unsubscribe;
-                                    EL ->                                         
+                                    _EL ->                                         
                                         do_not_unsubscribe
                                   end;                                                                   
                               false ->
@@ -226,3 +233,4 @@ erase_subscription_err(Subscription) ->
     {atomic, ok} =
         mnesia:transaction(fun () -> mnesia:delete({rabbithub_subscription_err, Subscription}) end),
     ok.
+
