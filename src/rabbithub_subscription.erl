@@ -36,6 +36,7 @@ create(Subscription, LeaseSeconds) ->
     start(Lease).
 
 delete(Subscription) ->
+    rabbit_log:info("RabbitHub deleting subscription~n~p~n", [Subscription]),
     {atomic, ok} =
         mnesia:transaction(fun () -> mnesia:delete({rabbithub_lease, Subscription}) end),
     {atomic, SubPids} =
