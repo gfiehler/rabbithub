@@ -6,7 +6,6 @@
 -include_lib("rabbit_common/include/rabbit.hrl").
 -include_lib("rabbit_common/include/rabbit_framing.hrl").
 
-
 -define(APPLICATION_XSLT, ("/" ++ rabbithub:canonical_basepath() ++ "/static/application.xsl.xml")).
 
 -define(DEFAULT_SUBSCRIPTION_LEASE_SECONDS, (30 * 86400)).
@@ -42,18 +41,18 @@ handle_req(Req) ->
     {FullPath, Query, _Fragment} = mochiweb_util:urlsplit_path(Req:get(raw_path)),
     %% plus one for the "/", plus one for the 1-based indexing for substr:
     Path = FullPath,
-    ParsedQuery = mochiweb_util:parse_qs(Query),    
+    ParsedQuery = mochiweb_util:parse_qs(Query),
     %% When we get to drop support for R12B-3, we can start using
     %% re:split(Path, "/", [{parts, 4}]) again.
 
     %% case split_path(Path, 4) of
     %% BRC
     case split_path(Path, 5) of
-        [<<>>, <<"static">> | _] ->            
+        [<<>>, <<"static">> | _] ->
             handle_static(Path, Req);
         [<<>>, <<>>] ->
             handle_static(Path, Req);
-        [<<>>, Facet, ResourceType, Name] ->            
+        [<<>>, Facet, ResourceType, Name] ->
             case check_resource_type(ResourceType) of
                 {ok, ResourceTypeAtom} ->
                     handle_request(ResourceTypeAtom,
@@ -63,25 +62,23 @@ handle_req(Req) ->
                                    Req);
                 {error, invalid_resource_type} ->
                     Req:not_found()
-            end;        
+            end;
         %% GF: added case specific to retrieving list of subscriptions
-        [<<>>, <<"subscriptions">>] ->        
+        [<<>>, <<"subscriptions">>] ->
             handle_request(none,
                            binary_to_list(<<"subscriptions">>),
                            <<>>,
                            ParsedQuery,
                            Req);
         %% GF: added case for retrieving a list of http post errorrs
-        [<<>>, <<"subscriptions">>, <<"errors">>] ->            
+        [<<>>, <<"subscriptions">>, <<"errors">>] ->
             handle_request(errors,
                            binary_to_list(<<"subscriptions">>),
                            binary_to_list(<<"errors">>),
                            ParsedQuery,
                            Req);
-        
-
         %% BRC
-        [<<>>, VHost, Facet, ResourceType, Name] ->            
+        [<<>>, VHost, Facet, ResourceType, Name] ->
             case check_resource_type(ResourceType) of
                 {ok, ResourceTypeAtom} ->
                     handle_request(ResourceTypeAtom,
@@ -120,9 +117,7 @@ check_facet('POST', "subscribe", "subscribe", _) -> {auth_required, [read]};
 check_facet('GET', "subscriptions", "", "errors") -> auth_not_required;
 %% GF: added new facet for getting a list of subscriptions
 check_facet('GET', "subscriptions", "", _) -> auth_not_required;
-
 check_facet('POST', "subscribe", "unsubscribe", _) -> {auth_required, []};
-
 check_facet(_Method, _Facet, _HubMode, _ResourceType) -> invalid_operation.
 
 handle_static("/" ++ StaticFile, Req) ->
@@ -164,11 +159,11 @@ check_auth(Req, Resource, PermissionsRequired, Fun) ->
                        end)
             end).
 
-handle_request(ResourceTypeAtom, Facet, Resource, ParsedQuery, Req) ->    
+handle_request(ResourceTypeAtom, Facet, Resource, ParsedQuery, Req) ->
     HubMode = param(ParsedQuery, "hub.mode", ""),
     Method = Req:get(method),
     case check_facet(Method, Facet, HubMode, ResourceTypeAtom) of
-        {auth_required, PermissionsRequired} ->            
+        {auth_required, PermissionsRequired} ->
             check_auth(Req, Resource, PermissionsRequired,
                        fun (_Username) ->
                                perform_request(Method,
@@ -179,7 +174,7 @@ handle_request(ResourceTypeAtom, Facet, Resource, ParsedQuery, Req) ->
                                                ParsedQuery,
                                                Req)
                        end);
-         auth_not_required ->                   
+         auth_not_required ->
             perform_request(Method,
                             list_to_atom(Facet),
                             list_to_atom(HubMode),
@@ -430,9 +425,14 @@ invoke_sub_fun_and_respond(Req, Fun, Callback, Topic, LeaseSeconds, MaybeShortcu
     case Fun(Callback, Topic, LeaseSeconds, MaybeShortcut) of
         ok ->
             Req:respond({204, [], []});
+        {ok, Body} ->
+            Req:respond({201, [{"Content-Type", "text/html"}], Body});
         {error, {status, StatusCode}} ->
-            Req:respond({StatusCode, [], []})
+            Req:respond({StatusCode, [], []});
+        {error, {status, StatusCode}, Reason} ->
+            Req:respond({StatusCode, [], Reason})
     end.
+    
 
 first_acceptable(_Predicate, []) ->
     {error, none_acceptable};
@@ -473,12 +473,12 @@ validate_subscription_request(Req, ParsedQuery, SourceResource, ActualUse, Fun) 
             Req:respond({400, [], "Missing required parameter"});
         false ->
             case decode_and_verify_token(VerifyToken) of
-                {ok, {TargetResource, IntendedUse, _ExtraData}} ->
+                {ok, {TargetResource, IntendedUse, _ExtraData}} -> 
                     %% OMG it's one of ours! It could be possible to
                     %% shortcut.
                     case IntendedUse of
                         ActualUse ->
-                            case can_shortcut(SourceResource, TargetResource) of
+                            case can_shortcut(SourceResource, TargetResource) of                      
                                 true ->
                                     invoke_sub_fun_and_respond(Req, Fun,
                                                                Callback, Topic, LeaseSeconds,
@@ -558,6 +558,7 @@ extract_message(ExchangeResource, ParsedQuery, Req) ->
                          S -> list_to_binary(S)
                      end,
     Body = Req:recv_body(),
+%%  rabbit_log:info("RabbitHub message delivery mode: ~p~n", [DeliveryMode]),
     rabbit_basic:message(ExchangeResource,
                          list_to_binary(RoutingKey),
                          [{'content_type', ContentTypeBin},{'delivery_mode',DeliveryMode}],
@@ -581,39 +582,41 @@ extract_message(ExchangeResource, ParsedQuery, PropList, Req) ->
                          
 %% GF: function to convert list of http post errors from database to JSON
 convert_errors_to_json(Errors) ->
-    Data = [{struct,  
-              [{resource, element(2,(Error#rabbithub_subscription_err.subscription)#rabbithub_subscription.resource)},              	              
-               {queue, element(4,(Error#rabbithub_subscription_err.subscription)#rabbithub_subscription.resource)},                        	     
+    Data = {struct, [{errors, [
+              [{resource, element(2,(Error#rabbithub_subscription_err.subscription)#rabbithub_subscription.resource)},
+               {queue, element(4,(Error#rabbithub_subscription_err.subscription)#rabbithub_subscription.resource)},
                {topic, list_to_binary((Error#rabbithub_subscription_err.subscription)#rabbithub_subscription.topic)},
                {callback, list_to_binary((Error#rabbithub_subscription_err.subscription)#rabbithub_subscription.callback)},
                {error_count, Error#rabbithub_subscription_err.error_count},
                {first_error_time_microsec, Error#rabbithub_subscription_err.first_error_time_microsec},
-               {last_error_time_microsec, Error#rabbithub_subscription_err.last_error_time_microsec}]}
-	    || Error <- Errors],    
+               {last_error_time_microsec, Error#rabbithub_subscription_err.last_error_time_microsec}]
+	    || Error <- Errors]}]},
     Resp = mochijson2:encode(Data),
     Resp.
 
 %% GF: function to convert list of leases from database to JSON
+
 convert_leases_to_json(Leases) ->
-    Data = [{struct,  
-              [{resource, element(2,(Lease#rabbithub_lease.subscription)#rabbithub_subscription.resource)},              	              
-               {queue, element(4,(Lease#rabbithub_lease.subscription)#rabbithub_subscription.resource)},                        	     
+    Data = {struct,  [{subscriptions, [
+              [{vhost, element(2,(Lease#rabbithub_lease.subscription)#rabbithub_subscription.resource)},              	              
+               {resource_type, element(3,(Lease#rabbithub_lease.subscription)#rabbithub_subscription.resource)},
+               {resource_name, element(4,(Lease#rabbithub_lease.subscription)#rabbithub_subscription.resource)}, 	     
                {topic, list_to_binary((Lease#rabbithub_lease.subscription)#rabbithub_subscription.topic)},
                {callback, list_to_binary((Lease#rabbithub_lease.subscription)#rabbithub_subscription.callback)},
-               {lease_expiry_time_microsec, Lease#rabbithub_lease.lease_expiry_time_microsec}]}
-	    || Lease <- Leases],    
+               {lease_expiry_time_microsec, Lease#rabbithub_lease.lease_expiry_time_microsec}]
+	    || Lease <- Leases]}]},
     Resp = mochijson2:encode(Data),
     Resp.
 
 %% GF: function to convert header value into a proplist
-proplist_from_options( Options ) ->        
-        NewOptions = re:replace(Options, "\\s+", "", [global,{return,list}]),        
+proplist_from_options( Options ) ->
+        NewOptions = re:replace(Options, "\\s+", "", [global,{return,list}]),
         Props = string:tokens( NewOptions, ", " ), % should give you ["abc=12343","someThing=value"]
         Fun = fun (Prop) -> [Name,Value] = string:tokens( Prop, "=" ), {erlang:list_to_binary( Name ),longstr, list_to_binary(Value)} end,
         lists:map( Fun, Props ).
 
 %% GF: GET current errors for each subscription
-perform_request('GET', subscriptions, '', errors, _Resource, _ParsedQuery, Req) ->     
+perform_request('GET', subscriptions, '', errors, _Resource, _ParsedQuery, Req) ->
      {atomic, Errors} =
         mnesia:transaction(fun () ->
                                    mnesia:foldl(fun (Error, Acc) -> [Error | Acc] end,
@@ -635,7 +638,7 @@ perform_request('GET', subscriptions, '', none, _Resource, _ParsedQuery, Req) ->
      Req:respond({200, [{"Content-Type", "application/json"}], Json });
 
 %% GF: Updated to handle message headers for header exchange POSTs
-perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->   
+perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
     
     case Req:get_header_value("x-rabbithub-msg_header") of
         %% no custom HTTP header for headers exchange, publish normal
@@ -649,20 +652,17 @@ perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
 		        Req:not_found()
 	        end;
 	    %% Custom Header for Headers exchange exists, convert header to message properties
-        CustHeaderProps ->             
-             Proplist = proplist_from_options(CustHeaderProps),             
-	         Msg = extract_message(Resource, ParsedQuery, Proplist, Req),             
+        CustHeaderProps ->
+             Proplist = proplist_from_options(CustHeaderProps),
+	         Msg = extract_message(Resource, ParsedQuery, Proplist, Req),
 	         Delivery = rabbit_basic:delivery(false, false, Msg, undefined),
 	         case rabbit_basic:publish(Delivery) of
 		     {ok,  _} ->
 	     	     Req:respond({202, [], []});
 		     {error, not_found} ->
 		         Req:not_found()
-	         end            
-
+	         end
     end;
-
-    
 
 perform_request('POST', endpoint, '', queue, Resource, ParsedQuery, Req) ->
     Msg = extract_message(rabbithub:r(exchange, ""), ParsedQuery, Req),
@@ -742,9 +742,6 @@ perform_request('GET', Facet, '', exchange, Resource, _ParsedQuery, Req) ->
             rabbithub:respond_xml(Req, 200, [], ?APPLICATION_XSLT, Xml)
     end;
 
-
-
-
 perform_request('GET', Facet, '', queue, Resource, _ParsedQuery, Req) ->
     case rabbit_amqqueue:lookup(Resource) of
         {error, not_found} ->
@@ -805,8 +802,24 @@ perform_request('POST', subscribe, subscribe, _ResourceTypeAtom, Resource, Parse
                                                                         topic = Topic,
                                                                         callback = Callback},
                                           case rabbithub_subscription:create(Sub, LeaseSeconds) of
-                                              ok -> ok;
-                                              {error, not_found} -> {error, {status, 404}};
+                                              ok -> 
+                                                HubHAConsumer = param(ParsedQuery, "hub.haconsumer", true),
+                                                case HubHAConsumer of
+                                                    true ->
+                                                        case application:get_env(rabbithub, ha_consumers) of
+                                                            {ok, Mode} ->
+                                                                Nodes = get_nodes(Mode),
+                                                                RPCRes = create_ha_consumers(Nodes, Sub, LeaseSeconds),
+                                                                Body = [{node(), ok}] ++ RPCRes,
+                                                                ResponseBody = convert_response_body_to_json(Body),
+                                                                {ok, ResponseBody};
+                                                            _ ->                                              
+                                                                ok
+                                                        end;
+                                                     false -> ok
+                                                end;
+                                                        
+                                              {error, not_found} -> {error, {status, 404}, "queue or exchange not found"};
                                               {error, _} -> {error, {status, 500}}
                                           end;
                                       (_Callback, Topic, _LeaseSeconds, TargetResource) ->
@@ -828,8 +841,23 @@ perform_request('POST', subscribe, unsubscribe, _ResourceTypeAtom, Resource, Par
                                           Sub = #rabbithub_subscription{resource = Resource,
                                                                         topic = Topic,
                                                                         callback = Callback},
-                                          ok = rabbithub_subscription:delete(Sub),
-                                          ok;
+                                        %%  ok = rabbithub_subscription:delete(Sub),
+                                        %%  ok;
+                                        case rabbithub_subscription:delete(Sub) of
+                                              ok -> 
+                                                case application:get_env(rabbithub, ha_consumers) of
+                                                    {ok, Mode} ->
+                                                        Nodes = get_nodes(Mode),
+                                                        RPCRes = delete_ha_consumers(Nodes, Sub),
+                                                        Body = [{node(), ok}] ++ RPCRes,
+                                                        ResponseBody = convert_response_body_to_json(Body),
+                                                        {ok, ResponseBody};
+                                                    _ ->                                              
+                                                        ok
+                                                end;
+                                              {error, not_found} -> {error, {status, 404}};
+                                              {error, _} -> {error, {status, 500}}
+                                          end;
                                       (_Callback, Topic, _LeaseSeconds, TargetResource) ->
                                           case rabbit_binding:remove(
                                                  #binding{source      = Resource,
@@ -852,6 +880,59 @@ perform_request(Method, Facet, HubMode, _ResourceType, Resource, ParsedQuery, Re
     rabbit_log:info("RabbitHub performing request ~p~n", [Xml]),
     rabbithub:respond_xml(Req, 200, [], none, Xml).
 
+create_ha_consumers(Nodes, Subscription, LeaseSeconds) ->
+        {Results, BadNodes} = rpc:multicall(Nodes, rabbithub_subscription, create, [Subscription, LeaseSeconds]),
+        %% create list of [{node1, result1}, {node2, result2},...]
+        FullResults = lists:append(
+            lists:zip(Nodes -- BadNodes, Results),
+            [{BN, {badrpc, nodedown}} || BN <- BadNodes]
+        ),
+        %% restore original order
+        RPCResults = [{N, Res} || N <- Nodes, {M, Res} <- FullResults, N == M],
+        RPCResults.
+        
+delete_ha_consumers(Nodes, Subscription) ->
+        {Results, BadNodes} = rpc:multicall(Nodes, rabbithub_subscription, delete, [Subscription]),
+        %% create list of [{node1, result1}, {node2, result2},...]
+        FullResults = lists:append(
+            lists:zip(Nodes -- BadNodes, Results),
+            [{BN, {badrpc, nodedown}} || BN <- BadNodes]
+        ),
+        %% restore original order
+        RPCResults = [{N, Res} || N <- Nodes, {M, Res} <- FullResults, N == M],
+        RPCResults.
+        
+get_nodes(Mode) ->
+    case Mode of
+        all -> nodes();
+        Num when is_integer(Num)-> pick_n_random_nodes(Num, nodes());
+        _ -> []
+    end.
+
+pick_n_random_nodes(N, _) when N == 0 ->
+    [];
+	
+pick_n_random_nodes(N, List) when N > 0 ->
+    ListLen = length(List),
+    NumNodes = case N > ListLen of
+                true ->  ListLen;
+                false -> N
+               end,
+    Index = random:uniform(length(List)),
+    Element = lists:nth(Index,List),
+    Result = [Element] ++ pick_n_random_nodes(NumNodes-1, lists:delete(Element, List)),
+    Result. 
+            
+%% GF: function to convert list of node responses to JSON	    
+convert_response_body_to_json(Body) ->
+    Data = {struct,  [{consumers, [
+              [{node, element(1, B)},
+               {status, element(2,B)}]
+	    || B <- Body]}]},
+    Resp = mochijson2:encode(Data),
+    Resp.
+    
+            
 
 handle_hub_post(Req) ->
     Req:respond({200, [], "You posted!"}).

@@ -119,13 +119,16 @@ Note that proxy server support is only available in RabbitHub for RabbitMQ 3.2.1
 
 ## Cluster Support
 
-RabbitHub now creates copies of its 3 mnesia tables across all nodes of a cluster for enhance cluster failover ability.
+### Mnesia Table Cluster Support
+RabbitHub now creates copies of its 3 mnesia tables across all nodes of a cluster for enhanced cluster failover ability.
 
  - rabbithub_lease (disc_copy)
  - rabbithub_subscription_pid (ram_copy)
  - rabbithub_subscription_err (ram_copy)
 
-RabbitHub consumers can now created with Consumer Tag format
+### RabbitHub Consumer Cluster Support
+#### Consumer Tags
+RabbitHub consumers can now be created with Consumer Tag format.  Consumer Tags show up in the Rabbitmq Management UI on the detail screen for a queue.  This helps identify where the Consumer is located in a cluster.
 
 	 amq.http.consumer.*localservername*-AhKV3L3eH2gZbrF79v2kig
 	 
@@ -136,7 +139,41 @@ RabbitHub consumers can now created with Consumer Tag format
      amq.http.consumer-AhKV3L3eH2gZbrF79v2kig
 	 
   will be used.  An example can of setting this variable can be found in the test folder in the file:  rabbitmq.config.consumertag.
-      
+  
+#### High Availability Consumers
+RabbitHub now supports several modes in which you can create more than 1 consumer for a subscription across the cluster for high availability.
+
+By setting the `ha_consumers` environment variable to one of the following modes
+
+  - `all`:  when a subscription is created a copy of the consumer is created on all nodes of the cluster
+  - `n`:  where `n` is an integer, in this mode a copy of the consumer will be started on `n` number of nodes plus the original node to which the subscription was made.  Therefore if I set `ha_consumers=1`, I will get 2 consumers.  The `n` consumers will be created on randomly selected cluster nodes other than the original node.
+  
+  Note:  In these modes Rabbithub will first create the consumer on the local node to which the subscription was made, if that consumer starts, it will always return a positive return code to the subscriber, even if some or all of the remote consumers do not start.  The body of the response will include status of all attemped consumer starts.  The following is an example response
+  
+  `{
+	"consumers": [{
+		"node": "rabbit@rabbit1",
+		"status": "ok"
+	}, {
+		"node": "rabbit@rabbit2",
+		"status": "ok"
+	}]
+   }`
+  
+#### RabbitHub Failover Support
+  If HA Queues are being used in the Rabbitmq cluster and a node goes down, those queues will failover to another node according to the policies set for HA Queues.  When this happens The consumers that are connected to that queue will also go down.  However, Rabbithub will attempt to restart all consumers that fail.  However, the restart attempts generally happen too quickly for the master queues to failover and be ready to accept new connection.  To solve this issue a new environment varaible can be set to set a wait interval between a consumer going down and the restart attempt which will, in most cases, allow the master queue to failover and be ready to accept new connections.
+  
+  Environment Variable:  `wait_for_consumer_restart_milliseconds = N` 
+	where `N` is an integer in milliseconds.  
+	
+## RabbitHub Troubleshooting
+
+  To help troubleshoot or just log activity an option is available to log the payload of all http posts to subscribers.		
+  
+  Environment Variable:  `log_http_post_request = true/false` 
+   ..* true:  will log all posts to subscribers
+   ..* false: (default) will not log posts to subscribers
+	 
    
 ## RabbitHub APIs
 
@@ -183,7 +220,11 @@ The following api will return a json formatted list of the current subscribers f
 	"lease_expiry_time_microsec": 4620919374000198
 }]
 ```
- 
+## RabbitHub hub.topic in posts to subscribers
+  RabbitHub environment variable- append_hub_topic_to_callback: (true, false)
+  ..* true: (default) Append hub.topic parameter when Posting a message to a subscriber
+  ..* false: Do not append hub.topic parameter when Posting a message to a subscriber 
+  
 ## RabbitHub HTTP Post to Subscriber Error Management
 Two new rabbithub environment parameters are now available to control what happens when a HTTP POST to a consumer fails.
 The following parameters can be defined in the `rabbitmq.config` file
@@ -192,6 +233,10 @@ These are set in the rabbitmq.config file as illustrated below
  * `requeue_on_http_post_error` = (true, false)
  ..* true:  will not requeue, message may be lost
  ..* false: will requeue, best utilized when queue has a dead-letter-exchange configured
+ * `unsubscribe_on_http_post_error` = (true, falise)
+ ..* true: (default) on HTTP Post error to subscriber, the consumer will be unsubscribed
+ ..* false: on HTTP Post error to subscriber the consumer will not be unsubscribed
+ ..* Note:  If this variable is set to false, it will override unsubscribe_on_http_post_error_limit and unsubscribe_on_http_post_error_timeout_microseconds and not unsubscribe even when reaching the configured limits.
  * `unsubscribe_on_http_post_error_limit` = integer
  ..* Integer value is how many errors are allowed prior to the consumer being unsubscribed
  * `unsubscribe_on_http_post_error_timeout_microseconds` = microseconds
