@@ -63,10 +63,12 @@ handle_call(Request, _From, State) ->
 
 handle_cast({deliver, _ConsumerTag, AckRequired,
              {_QNameResource, QPid, MsgId, Redelivered, BasicMessage}},
-            State = #state{subscription = Subscription}) ->
-    case rabbithub:deliver_via_post(Subscription,
+            State = #state{subscription = Subscription}) ->    
+      
+    RESP = rabbithub:deliver_via_post(Subscription,
                                     BasicMessage,
-                                    [{"X-AMQP-Redelivered", atom_to_list(Redelivered)}]) of
+                                    [{"X-AMQP-Redelivered", atom_to_list(Redelivered)}]),
+    case  RESP of
         {ok, _} ->
             ok = rabbit_amqqueue:notify_sent(QPid, self()),
             case AckRequired of
@@ -90,7 +92,7 @@ handle_cast({deliver, _ConsumerTag, AckRequired,
                     %% capture the offending messages, rather than have them end up back on the 
                     %% subscription queue and getting stuck in some sort of error loop.
                     case application:get_env(rabbithub, requeue_on_http_post_error) of
-                       {ok, false} ->
+                       {ok, false} ->	
                            ok = rabbit_amqqueue:notify_sent(QPid, self()),
                            case AckRequired of
                                true ->
@@ -115,8 +117,13 @@ handle_cast({deliver, _ConsumerTag, AckRequired,
             case application:get_env(rabbithub, unsubscribe_on_http_post_error_limit) of
                 {ok, ErrorLimit} when is_integer(ErrorLimit)->
                     case application:get_env(rabbithub, unsubscribe_on_http_post_error_timeout_microseconds) of
-                        {ok, ErrorTimeout} when is_integer(ErrorTimeout)->                            
-                            case register_subscription_err(Subscription, ErrorLimit, ErrorTimeout) of
+                        {ok, ErrorTimeout} when is_integer(ErrorTimeout)->  
+                            ContentStr = lists:flatten(io_lib:format("~p", [Content])),
+                            ContentStr2 = re:replace(re:replace(ContentStr, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),
+                            ReasonStr = lists:flatten(io_lib:format("~p", [Reason])),
+                            ReasonStr2 = re:replace(re:replace(ReasonStr, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),
+                            ErrorMsg = list_to_binary(ReasonStr2 ++ "/" ++ ContentStr2),
+                            case register_subscription_err(Subscription, ErrorLimit, ErrorTimeout, ErrorMsg) of
                                 unsubscribe ->
 					                ok = rabbithub:error_and_unsub(Subscription,
 									                                {rabbithub_consumer, http_post_failure, Reason, Content});
@@ -166,13 +173,14 @@ code_change(_OldVsn, State, _Extra) ->
 %% only unsubscribe if the subscriber has returned an error to a post more than
 %% unsubscribe_on_http_post_error_limit times within unsubscribe_on_http_post_error_timeout_min minutes
 %%-record(rabbithub_subscription_err, {subscription, error_count, first_error_time_microsec, last_error_time_microsec}). 
-register_subscription_err(Subscription, ErrorLimit, ErrorTimeout) ->
+register_subscription_err(Subscription, ErrorLimit, ErrorTimeout, ErrorMsg) ->
     NowMicro = rabbithub_subscription:system_time(),
     
     NewErrRecord = #rabbithub_subscription_err{subscription = Subscription,
                                                        error_count = 1,
                                                        first_error_time_microsec = NowMicro,
-                                                       last_error_time_microsec  = NowMicro},
+                                                       last_error_time_microsec  = NowMicro,
+                                                       last_error_msg = ErrorMsg},
 
     {atomic, Result} =
         mnesia:transaction(
@@ -222,7 +230,8 @@ register_subscription_err(Subscription, ErrorLimit, ErrorTimeout) ->
                                       false ->
                                           %% update error_count and return do_not_unsubscribe 
                                           UpdatedExistingRecord = ExistingRecord#rabbithub_subscription_err{error_count = NewErrorCount,
-                                                                                                                last_error_time_microsec = NowMicro},                                          
+                                                                                                                last_error_time_microsec = NowMicro,
+                                                                                                                last_error_msg = ErrorMsg},
                                           ok = mnesia:write(UpdatedExistingRecord),
                                           rabbit_log:warning("Rabbithub HTTP POST error occurred within configured limits.  Update Error Count ~n~p~n", [UpdatedExistingRecord]),
                                           do_not_unsubscribe

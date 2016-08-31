@@ -146,7 +146,7 @@ RabbitHub now supports several modes in which you can create more than 1 consume
 By setting the `ha_consumers` environment variable to one of the following modes
 
   - `all`:  when a subscription is created a copy of the consumer is created on all nodes of the cluster
-  - `n`:  where `n` is an integer, in this mode a copy of the consumer will be started on `n` number of nodes plus the original node to which the subscription was made.  Therefore if I set `ha_consumers=1`, I will get 2 consumers.  The `n` consumers will be created on randomly selected cluster nodes other than the original node.
+  - `n`:  where `n` is an integer, in this mode a copy of the consumer will be started on `n` number of nodes plus the original node to which the subscription was made.  Therefore if `ha_consumers=1` and there are more than 1 node in the cluster,  2 consumers will be created.  The `n` consumers will be created on randomly selected cluster nodes other than the original node.
   
   Note:  In these modes Rabbithub will first create the consumer on the local node to which the subscription was made, if that consumer starts, it will always return a positive return code to the subscriber, even if some or all of the remote consumers do not start.  The body of the response will include status of all attemped consumer starts.  The following is an example response
   
@@ -174,7 +174,28 @@ By setting the `ha_consumers` environment variable to one of the following modes
    ..* true:  will log all posts to subscribers
    ..* false: (default) will not log posts to subscribers
 	 
+  To log other values that may be useful for troubleshooting or for archive records the following Environment Variables are available:
+
+  Environment Variable:  `log_http_headers = [header1, header2]` 
+   ..* List of HTTP Headers:  a comma separated list of http headers in single quotes. E.g. ['content-type', 'authorization']
+   Each http header, if it exists, when a message is published to RabbitHub will be logged.
    
+  Environment Variable:  `set_correlation_id = 'http header'` 
+   ..* HTTP Header:  the name of an http header that will have a value of a correlation id.  E.g. 'x-correlation-id'
+   If this header exists when a message is published to RabbitHub, the value will be passed on to all subscribers using the same http header on the Post to the subscriber.
+   
+  Environment Variable:  `set_message_id = 'http header'` 
+   ..* HTTP Header:  the name of an http header to send a message id to the subscriber.  E.g. 'x-message-id'
+   If this variable is set, when a message is published to RabbitHub, a message id will be generated and logged with the publication and then the message id will be sent to all subscribers as the value to this http header.
+   
+## RabbitHub Subscriber Management
+  By default the subscriber callback URL must be active and available to validate subscribe and unsubscribe requests.  The following environment variable allows for unsubscribing (deactivating) a subscriber without the validation to the callback URL.  This can be useful if a subscriber is down and it is desired to keep the subscription record in an inactive state until it is back up and available.
+  
+  Environment Variable:  `validate_callback_on_unsubscribe = true/false` 
+   ..* true (default):  default behavior requires the callback URL to validate all unsubscribe/deactivate requests
+   ..* false:  when a unsubscribe request is made, do not validate with the callback URL, shutdown any active consumers and change status to inactive.
+
+  
 ## RabbitHub APIs
 
 ### VHOST Support
@@ -194,32 +215,53 @@ a rabbitmq message properties used by headers exchanges for routing messages to 
   x-rabbithub-msg_header:keya = valueA,keyb = valueB
 '''
 
-### List of Subscribers
+### Export List of Subscribers
 The following api will return a json formatted list of the current subscribers for RabbitHub.
 
-
+`curl --request GET http://guest:guest@localhost:15670/subscriptions`
   
-- resource:  vhost
- - queue:  queue name
- - topic:  routing key from hub.topic parameter
- - callback:  url of callback subscriber
+ - vhost:  vhost
+ - resource_type:  queue or exchange
+ - resource_name:  name of resource
+ - topic:          routing key from hub.topic parameter
+ - callback:       url of callback subscriber
  - lease_expiry_time_microsec: date time of subscription expiration in microseconds- http://localhost:15670/subscriptions   
+ - lease_seconds:  the lease time in seconds as given at time of subscription
+ - ha_mode:        HA Mode (all, n, none)
+ - status:         active/inactive
  
 ```javascript
-[{
-	"resource": "/",
-	"queue": "foo2",
-	"topic": "foo2",
-	"callback": "http://localhost:8999/rest/testsubscriber2",
-	"lease_expiry_time_microsec": 4620923686910449
-}, {
-	"resource": "/",
-	"queue": "foo1",
-	"topic": "foo1",
-	"callback": "http://localhost:8999/rest/testsubscriber1",
-	"lease_expiry_time_microsec": 4620919374000198
-}]
+{
+	"subscriptions": [{
+		"vhost": "/",
+		"resource_type": "queue",
+		"resource_name": "ha.q2",
+		"topic": "inactivetest",
+		"callback": "http://callbackdomain/subscriber/s2",
+		"lease_expiry_time_microsec": 1472911582355564,
+		"lease_seconds": 1000000,
+		"ha_mode": "all",
+		"status": "inactive"
+	}, {
+		"vhost": "/",
+		"resource_type": "queue",
+		"resource_name": "ha.1",
+		"topic": "activetest",
+		"callback": "http://callbackdomain/subscriber/s1",
+		"lease_expiry_time_microsec": 1472911582355564,
+		"lease_seconds": 1000000,
+		"ha_mode": "all",
+		"status": "active"
+	}]
 ```
+### Import Subscribers in Batch
+The file that was exported in the previous section can then be imported with the following API
+
+```javascript
+  curl -d '{"subscriptions":[{"vhost":"/","resource_type":"queue","resource_name":"ha.q2","topic":"ha.q2","callback":"http://RabbitErl19:8999/rabbithub/s2","lease_expiry_time_microsec":1472716785983474, "lease_seconds":1000000,"ha_mode":"none","status":"active"}, {"vhost":"/","resource_type":"queue","resource_name":"ha.q1","topic":"ha.q1","callback":"http://callbackdomain/subscriber/s2", "lease_expiry_time_microsec":1472733774026491, "lease_seconds":1000000,"ha_mode":"none","status":"active"}, {"vhost":"/","resource_type":"queue","resource_name":"ha.q1","topic":"test","callback":"http://callbackdomain/subscriber/s2", "lease_expiry_time_microsec":1472733774026491,"lease_seconds":1000000,"ha_mode":"none","status":"inactive"}]}' --header "content-type:application/json" http://guest:guest@localhost:15670/subscriptions
+```
+Both export and import are also available via the RabbitHub Management UI.
+
 ## RabbitHub hub.topic in posts to subscribers
   RabbitHub environment variable- append_hub_topic_to_callback: (true, false)
   ..* true: (default) Append hub.topic parameter when Posting a message to a subscriber
@@ -290,6 +332,24 @@ To help understand how many errors have occured the following rest endpoint retu
 	"last_error_time_microsec": 1467326522694452
 }]
 ```
+
+## RabbitHub Subscriber Creation
+  
+  To create a RabbitHub subscriber a restful api must be created that implements the following methods
+  
+  POST:  this will receive a message that the callback URL has been subscribed to as the body of the POST
+	The following HTTP Headers may be set when the the message is POSTed to this URL
+	
+	
+  GET:  this will receive validation requests for creating a subscription that will forward messages to this URL.  
+    The method will receive a GET request with the following query parameter
+		hub.challenge=`token`
+	The api must return the token as the body of the response to validate that it is ok to create a subscription to this URL.
+	
+## RabbitHub Management UI
+A Rabbitmq_management plugin has been created for RabbitHub.  Please refer to 
+
+		https://github.com/gfiehler/rabbithub_management
  
 ## Software License
 

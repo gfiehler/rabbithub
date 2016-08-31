@@ -1,9 +1,9 @@
 -module(rabbithub_subscription).
 
 -export([start_subscriptions/0]).
--export([create/2, delete/1]).
+-export([create/4, delete/1, deactivate/1]).
 -export([start_link/1]).
--export([register_subscription_pid/3, erase_subscription_pid/1]).
+-export([register_subscription_pid/3, erase_subscription_pid/1, delete_local_consumer/1]).
 
 %% Internal export
 -export([expire/1]).
@@ -34,37 +34,90 @@ start_subscriptions() ->
                            end),
     lists:foreach(fun start/1, Leases).
 
-create(Subscription, LeaseSeconds) ->
+create(Subscription, LeaseSeconds, HAMode, Status) ->
     rabbithub_consumer:erase_subscription_err(Subscription),
-    RequestedExpiryTime = system_time() + LeaseSeconds * 1000000,
+    RequestedExpiryTime = system_time() + LeaseSeconds * 1000000,    
     Lease = #rabbithub_lease{subscription = Subscription,
-                             lease_expiry_time_microsec = RequestedExpiryTime},
+                             lease_expiry_time_microsec = RequestedExpiryTime,
+                             lease_seconds = LeaseSeconds,
+                             ha_mode = HAMode,
+                             status = Status},
     {atomic, ok} = mnesia:transaction(fun () -> ok = mnesia:write(Lease) end),
     start(Lease).
+    
+    
+%%GF changing unsubscription to set status to inactive instead of deleting from table
+deactivate(Subscription) ->
+    Consumer = #consumer{subscription = Subscription, node = node()},
+    rabbit_log:info("RabbitHub deactivate subscription~n~p~n", [Subscription]),
+    
+    case update_lease_status(Subscription, inactive) of
+        {atomic, ok} ->        
+            {atomic, SubPids} =        
+                mnesia:transaction(
+                  fun () ->
+                          SubPids = mnesia:read({rabbithub_subscription_pid, Consumer}),
+                          ok = mnesia:delete({rabbithub_subscription_pid, Consumer}),
+                          SubPids
+                  end),
+            lists:foreach(fun (#rabbithub_subscription_pid{pid = Pid,
+                                                           expiry_timer = TRef}) ->
+                                  {ok, cancel} = timer:cancel(TRef),
+                                  gen_server:cast(Pid, shutdown)
+                          end, SubPids),
+            ok;
+        {aborted, {{badmatch, _},_}} -> {error, not_found};
+        {aborted, Reason} -> {error, Reason}
+    end.
+
+
+update_lease_status(Subscription, Status) ->
+    LeaseUpdateFun = fun() ->
+        [L] = mnesia:read({rabbithub_lease, Subscription}),        
+        mnesia:write(L#rabbithub_lease{status = Status})
+    end,
+
+    mnesia:transaction(LeaseUpdateFun).
+    
+
 
 delete(Subscription) ->
     Consumer = #consumer{subscription = Subscription, node = node()},
     rabbit_log:info("RabbitHub deleting subscription~n~p~n", [Consumer]),
+    R3 = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Subscription}) end),
+    case R3 of
+        {atomic, []} ->
+            {error, not_found};       
+        {atomic, X} ->
+            R1 = mnesia:transaction(fun () -> mnesia:delete({rabbithub_lease, Subscription}) end),                    
+            delete_local_consumer(Subscription);
+        {aborted, Reason} -> 
+            {error, Reason}
+    end.
     
-    {atomic, ok} =
-        mnesia:transaction(fun () -> mnesia:delete({rabbithub_lease, Subscription}) end),
-    {atomic, SubPids} =        
-        mnesia:transaction(
-          fun () ->
-                  SubPids = mnesia:read({rabbithub_subscription_pid, Consumer}),
-                  ok = mnesia:delete({rabbithub_subscription_pid, Consumer}),
-                  SubPids
-          end),
+delete_local_consumer(Subscription) ->
+    Consumer = #consumer{subscription = Subscription, node = node()},
+    rabbit_log:info("RabbitHub deleting Consumer~p~n", [Consumer]),
+    Consumers =        
+         mnesia:transaction(
+              fun () ->
+                      SubPids1 = mnesia:read({rabbithub_subscription_pid, Consumer}),
+                      ok = mnesia:delete({rabbithub_subscription_pid, Consumer}),
+                      SubPids1
+              end),          
+    {atomic, SubPids2} = Consumers,
     lists:foreach(fun (#rabbithub_subscription_pid{pid = Pid,
                                                    expiry_timer = TRef}) ->
                           {ok, cancel} = timer:cancel(TRef),
                           gen_server:cast(Pid, shutdown)
-                  end, SubPids),
-    ok.
+                  end, SubPids2),
+    ok.     
+
+
 
 expire(Subscription) ->
     rabbit_log:info("RabbitHub expiring subscription~n~p~n", [Subscription]),
-    delete(Subscription).
+    deactivate(Subscription).
 
 start_link(Lease =
            #rabbithub_lease{subscription =
@@ -78,14 +131,19 @@ start_link(Lease =
     end.
 
 start(Lease) ->
-    case supervisor:start_child(rabbithub_subscription_sup, [Lease]) of
-        {ok, _Pid} ->
-            ok;
-        {error, normal} ->
-            %% duplicate processes return normal, so as to not provoke the error logger.
-            ok;
-        {error, Reason} ->
-            {error, Reason}
+    case Lease#rabbithub_lease.status of
+        active ->
+            case supervisor:start_child(rabbithub_subscription_sup, [Lease]) of
+                {ok, _Pid} ->
+                    ok;
+                {error, normal} ->
+                    %% duplicate processes return normal, so as to not provoke the error logger.
+                    ok;
+                {error, Reason} ->
+                    {error, Reason}
+            end;
+        Other ->
+            ok
     end.
 
 register_subscription_pid(Lease, Pid, ProcessModule) ->
@@ -102,7 +160,7 @@ register_subscription_pid1(#rabbithub_lease{subscription = Subscription,
     case NowMicro > ExpiryTimeMicro of
         true ->
             %% Expired.
-            ok = delete(Subscription),
+            ok = deactivate(Subscription),
             expired;
         false ->
             %% Not *yet* expired. Always start a timer, since even if

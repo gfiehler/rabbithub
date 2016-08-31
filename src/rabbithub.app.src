@@ -7,8 +7,7 @@
                         rabbithub_web,simple_httpc]},
               {registered,[]},
   {mod, {rabbithub, []}},
-              {env,[{listener,[{port,15670}]},
-                    {default_username,"guest"},
+              {env,[{listener,[{port,15670}]},                    
                     {requeue_on_http_post_error, true}
                     ]},
               {applications,[kernel,stdlib,crypto,rabbitmq_web_dispatch]}]}.

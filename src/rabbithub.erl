@@ -257,6 +257,12 @@ stylesheet_pi(none) ->
     [];
 stylesheet_pi(RelUrl) ->
     ["<?xml-stylesheet href=\"", RelUrl, "\" type=\"text/xsl\" ?>"].
+    
+format_xheader({K, _T, V}) ->
+    lists:flatten(io_lib:format("~s = ~s", [K, V])).
+    
+format_headers(Headers) ->
+    string:join(lists:map(fun format_xheader/1, Headers), ", ").        
 
 deliver_via_post(#rabbithub_subscription{callback = Callback},
                  #basic_message{routing_keys = [RoutingKeyBin | _],
@@ -288,12 +294,72 @@ deliver_via_post(#rabbithub_subscription{callback = Callback},
 		   ContentType = case ContentTypeBin of
 							undefined -> "application/octet-stream";
 							_ -> binary_to_list(ContentTypeBin)
-						 end,
-
-		   Payload = {URL, 
-					 [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)} | ExtraHeaders], 
-                      ContentType, PayloadBin},
+						 end,           
+           %% Adding options to send message_id and correlation_id as http headers to subscriber
+           MsgIdHeaderName = case application:get_env(rabbithub, set_message_id) of
+                {ok, MsgIdHeaderName1} -> MsgIdHeaderName1;
+                undefined -> undefined
+           end,
+           
+           MsgId = case MsgIdHeaderName of
+                undefined -> undefined;
+                _MsgIdHeaderName2 ->                     
+                   (Content0#content.properties)#'P_basic'.message_id                
+           end,
+           CorrIdHeaderName = case application:get_env(rabbithub, set_correlation_id) of
+                undefined -> undefined;
+                {ok, CorrIdHeaderName1} -> CorrIdHeaderName1                
+           end,
+           CorrId =  case CorrIdHeaderName of                
+                undefined -> undefined;
+                _CorrIdHeaderName2 -> 
+                    (Content0#content.properties)#'P_basic'.correlation_id
+           end,   
+           MsgHeaders = (Content0#content.properties)#'P_basic'.headers,
+           MsgHdrs = case MsgHeaders of
+                undefined -> 
+                    undefined;
+                MsgHdrsTmp -> 
+                    format_headers(MsgHeaders)                
+           end,
+           
+           AllHeaders = case {MsgId, CorrId, MsgHdrs} of
+                {undefined, undefined, undefined} ->               
+                    [{"Content-length", integer_to_list(size(PayloadBin))},
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)} | ExtraHeaders];
+					  
+                {MId, undefined, undefined} -> 
+                    [{"Content-length", integer_to_list(size(PayloadBin))},
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}| ExtraHeaders];
+			    {undefined, undefined, MH} -> 
+                    [{"Content-length", integer_to_list(size(PayloadBin))},
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders];
+				
+				{undefined, CId, undefined} -> 
+                    [{"Content-length", integer_to_list(size(PayloadBin))},
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, {atom_to_list(CorrIdHeaderName), binary_to_list(CId)} | ExtraHeaders];
+					  
+			    {undefined, CId, MH} -> 
+                    [{"Content-length", integer_to_list(size(PayloadBin))},
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, {atom_to_list(CorrIdHeaderName), binary_to_list(CId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders];
+					  
+			    {MId, undefined, MH} -> 
+                    [{"Content-length", integer_to_list(size(PayloadBin))},
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},{atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders];		  
+					  
+		        {MId, CId, undefined} -> 
+                    [{"Content-length", integer_to_list(size(PayloadBin))},
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},{atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, {atom_to_list(CorrIdHeaderName), binary_to_list(CId)} | ExtraHeaders];					  			    
+									  
+				{MId, CId, MH} -> 
+                    [{"Content-length", integer_to_list(size(PayloadBin))},
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},{atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, {atom_to_list(CorrIdHeaderName), binary_to_list(CId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders]					  	  
+                                                		        
+          end, 
+           
+           
+           
+		   Payload = {URL, AllHeaders, ContentType, PayloadBin},
 						 
 		   % Log the request if the environment variable has been set - default
 		   % is not to log the request

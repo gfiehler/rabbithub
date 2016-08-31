@@ -113,10 +113,12 @@ check_facet('GET', "endpoint", "unsubscribe", _) -> auth_not_required;
 check_facet('GET', "subscribe", "", _) -> auth_not_required;
 check_facet('POST', "subscribe", "", _) -> auth_not_required; %% special case: see implementation
 check_facet('POST', "subscribe", "subscribe", _) -> {auth_required, [read]};
+check_facet('DELETE', "subscribe", _, _) -> {auth_required, [configure]};
 %% GF: added new facet for getting a list of HTTP POST errors
-check_facet('GET', "subscriptions", "", "errors") -> auth_not_required;
+check_facet('GET', "subscriptions", "", "errors") -> auth_required_rabbithub_admin;
 %% GF: added new facet for getting a list of subscriptions
-check_facet('GET', "subscriptions", "", _) -> auth_not_required;
+check_facet('GET', "subscriptions", "", _) -> auth_required_rabbithub_admin;
+check_facet('POST', "subscriptions", "", _) -> auth_required_rabbithub_admin;
 check_facet('POST', "subscribe", "unsubscribe", _) -> {auth_required, []};
 check_facet(_Method, _Facet, _HubMode, _ResourceType) -> invalid_operation.
 
@@ -182,6 +184,19 @@ handle_request(ResourceTypeAtom, Facet, Resource, ParsedQuery, Req) ->
                             Resource,
                             ParsedQuery,
                             Req);
+                            
+        auth_required_rabbithub_admin ->
+            rabbithub_auth:check_authentication_and_roles(Req, 
+                                                              [administrator, rabbithub_admin],
+                                                              fun (_Username) ->
+                                                                perform_request(Method,
+                                                                               list_to_atom(Facet),
+                                                                               list_to_atom(HubMode),
+                                                                               ResourceTypeAtom,
+                                                                               Resource,
+                                                                               ParsedQuery,
+                                                                               Req)
+                                                                end);            
         invalid_operation ->
             Req:respond({400, [], "Invalid operation"})
     end.
@@ -379,8 +394,26 @@ can_shortcut(#resource{kind = exchange}, #resource{kind = queue}) ->
 can_shortcut(_, _) ->
     false.
 
-
 do_validate(Callback, Topic, LeaseSeconds, ActualUse, VerifyToken) ->
+    Validate = case application:get_env(rabbithub, validate_callback_on_unsubscribe) of
+        {ok, false} -> false;
+        {ok, true} -> true;
+        {ok, _} -> true;
+        undefined  -> true                                                                
+    end,
+    case ActualUse of
+        subscribe -> 
+            do_validataion(Callback, Topic, LeaseSeconds, ActualUse, VerifyToken);
+        unsubscribe ->
+            case Validate of
+                true ->
+                    do_validataion(Callback, Topic, LeaseSeconds, ActualUse, VerifyToken);
+                false ->
+                    ok
+            end
+     end.
+     
+do_validataion(Callback, Topic, LeaseSeconds, ActualUse, VerifyToken) ->
     case catch mochiweb_util:urlsplit(Callback) of
         {_Scheme, _NetLoc, _Path, ExistingQuery, _Fragment} ->   	%% Scheme can be http or https
            Challenge = list_to_binary(rabbithub:b64enc(rabbit_guid:binary(rabbit_guid:gen(), "c"))),
@@ -434,7 +467,7 @@ invoke_sub_fun_and_respond(Req, Fun, Callback, Topic, LeaseSeconds, MaybeShortcu
     end.
     
 
-first_acceptable(_Predicate, []) ->
+first_acceptable(_Predicate, []) ->    
     {error, none_acceptable};
 first_acceptable(Predicate, [Candidate | Rest]) ->
     case Predicate(Candidate) of
@@ -461,7 +494,7 @@ extract_lease_seconds(ParsedQuery) ->
         Value ->
             Value
     end.
-
+%%subscribing or unsubscribing a subscription does require the subscriber to be available
 validate_subscription_request(Req, ParsedQuery, SourceResource, ActualUse, Fun) ->
     Callback = param(ParsedQuery, "hub.callback", missing),
     Topic = param(ParsedQuery, "hub.topic", missing),
@@ -534,6 +567,8 @@ validate_subscription_request(Req, ParsedQuery, SourceResource, ActualUse, Fun) 
                     end
             end
     end.
+    
+
 
 % QueryString hub.persistmsg = 0 or false, DeliveryMode = 1 -> non-persistent message
 % QueryString hub.persistmsg = 1 or true , DeliveryMode = 2 -> persistent message (saved to disk)
@@ -550,7 +585,8 @@ get_msg_delivery_mode(PersistMsg) ->
             1
    end.
 
-extract_message(ExchangeResource, ParsedQuery, Req) ->
+                         
+extract_message(ExchangeResource, ParsedQuery, MsgId, CorrId, Req) ->
     RoutingKey = param(ParsedQuery, "hub.topic", ""),
     DeliveryMode = get_msg_delivery_mode(param(ParsedQuery, "hub.persistmsg", "0")),
     ContentTypeBin = case Req:get_header_value("content-type") of
@@ -559,13 +595,24 @@ extract_message(ExchangeResource, ParsedQuery, Req) ->
                      end,
     Body = Req:recv_body(),
 %%  rabbit_log:info("RabbitHub message delivery mode: ~p~n", [DeliveryMode]),
+    AllProps = case {MsgId, CorrId} of
+        {undefined, undefined} ->
+            [{'content_type', ContentTypeBin},{'delivery_mode',DeliveryMode}];
+        {MId, undefined} -> 
+            [{'content_type', ContentTypeBin},{'delivery_mode',DeliveryMode}, {'message_id', MId}];
+        {undefined, CId} -> 
+            [{'content_type', ContentTypeBin},{'delivery_mode',DeliveryMode}, {'correlation_id', CId}];
+        {MId, CId} -> 
+            [{'content_type', ContentTypeBin},{'delivery_mode',DeliveryMode}, {'message_id', MId}, {correlation_id, CId}]
+    end,     
     rabbit_basic:message(ExchangeResource,
                          list_to_binary(RoutingKey),
-                         [{'content_type', ContentTypeBin},{'delivery_mode',DeliveryMode}],
+                         AllProps,
                          Body).
                          
+                         
 %% GF: function to add custom message properties to msg
-extract_message(ExchangeResource, ParsedQuery, PropList, Req) ->
+extract_message(ExchangeResource, ParsedQuery, PropList, MsgId, CorrId, Req) ->
     RoutingKey = param(ParsedQuery, "hub.topic", ""),
     DeliveryMode = get_msg_delivery_mode(param(ParsedQuery, "hub.persistmsg", "0")),
     ContentTypeBin = case Req:get_header_value("content-type") of
@@ -573,8 +620,17 @@ extract_message(ExchangeResource, ParsedQuery, PropList, Req) ->
                          S -> list_to_binary(S)
                      end,
     Body = Req:recv_body(),    
-    HeaderList = [{headers, PropList}],
-    AllProps = lists:append([[{'content_type', ContentTypeBin},{'delivery_mode',DeliveryMode}],HeaderList]),
+    HeaderList = [{headers, PropList}],       
+    AllProps = case {MsgId, CorrId} of
+        {undefined, undefined} ->
+            lists:append([[{'content_type', ContentTypeBin},{'delivery_mode',DeliveryMode}],HeaderList]);
+        {MId, undefined} -> 
+            lists:append([[{'content_type', ContentTypeBin},{'delivery_mode',DeliveryMode}, {'message_id', MId}],HeaderList]);
+        {undefined, CId} -> 
+            lists:append([[{'content_type', ContentTypeBin},{'delivery_mode',DeliveryMode}, {'correlation_id', CId}],HeaderList]);
+        {MId, CId} -> 
+            lists:append([[{'content_type', ContentTypeBin},{'delivery_mode',DeliveryMode}, {'message_id', MId}, {'correlation_id', CId}],HeaderList])
+    end,          
     rabbit_basic:message(ExchangeResource,
                          list_to_binary(RoutingKey),
                          AllProps,
@@ -589,7 +645,8 @@ convert_errors_to_json(Errors) ->
                {callback, list_to_binary((Error#rabbithub_subscription_err.subscription)#rabbithub_subscription.callback)},
                {error_count, Error#rabbithub_subscription_err.error_count},
                {first_error_time_microsec, Error#rabbithub_subscription_err.first_error_time_microsec},
-               {last_error_time_microsec, Error#rabbithub_subscription_err.last_error_time_microsec}]
+               {last_error_time_microsec, Error#rabbithub_subscription_err.last_error_time_microsec},
+               {last_error_msg, Error#rabbithub_subscription_err.last_error_msg}]
 	    || Error <- Errors]}]},
     Resp = mochijson2:encode(Data),
     Resp.
@@ -603,7 +660,10 @@ convert_leases_to_json(Leases) ->
                {resource_name, element(4,(Lease#rabbithub_lease.subscription)#rabbithub_subscription.resource)}, 	     
                {topic, list_to_binary((Lease#rabbithub_lease.subscription)#rabbithub_subscription.topic)},
                {callback, list_to_binary((Lease#rabbithub_lease.subscription)#rabbithub_subscription.callback)},
-               {lease_expiry_time_microsec, Lease#rabbithub_lease.lease_expiry_time_microsec}]
+               {lease_expiry_time_microsec, Lease#rabbithub_lease.lease_expiry_time_microsec},
+               {lease_seconds, Lease#rabbithub_lease.lease_seconds},
+               {ha_mode, Lease#rabbithub_lease.ha_mode},
+               {status, Lease#rabbithub_lease.status}]
 	    || Lease <- Leases]}]},
     Resp = mochijson2:encode(Data),
     Resp.
@@ -613,7 +673,175 @@ proplist_from_options( Options ) ->
         NewOptions = re:replace(Options, "\\s+", "", [global,{return,list}]),
         Props = string:tokens( NewOptions, ", " ), % should give you ["abc=12343","someThing=value"]
         Fun = fun (Prop) -> [Name,Value] = string:tokens( Prop, "=" ), {erlang:list_to_binary( Name ),longstr, list_to_binary(Value)} end,
-        lists:map( Fun, Props ).
+        lists:map( Fun, Props ).    
+            
+find_and_get_element(List, Key, ElementPos) ->
+    case lists:keyfind(Key, 1, List) of
+        false -> undefined;
+        Other -> (element(ElementPos, Other))
+    end.
+        
+manage_validation(SubscriptionTuple, TableId) ->
+%% TODO add validation to all values and check for required values.
+    Callback = binary_to_list(element(2, lists:keyfind(<<"callback">>, 1, element(2, SubscriptionTuple)))),
+    Topic = binary_to_list(element(2, lists:keyfind(<<"topic">>, 1, element(2, SubscriptionTuple)))),
+    LeaseMicro = element(2, lists:keyfind(<<"lease_expiry_time_microsec">>, 1, element(2, SubscriptionTuple))),
+    Lease_Micro_Less_ST = LeaseMicro - rabbithub_subscription:system_time(),
+    
+    Vhost = element(2, lists:keyfind(<<"vhost">>, 1, element(2, SubscriptionTuple))),
+    ResourceType = binary_to_atom(element(2, lists:keyfind(<<"resource_type">>, 1, element(2, SubscriptionTuple))), latin1),
+    ResourceName = element(2, lists:keyfind(<<"resource_name">>, 1, element(2, SubscriptionTuple))),
+    
+    Status = find_and_get_element(element(2, SubscriptionTuple), <<"status">>, 2),
+    Status2 = case Status of
+        undefined -> undefined;
+        BinStatus when is_binary(BinStatus) -> binary_to_atom(BinStatus, latin1)
+    end,
+    %%illegal status values are converted to inactive, the record will be inserted but the callback will not be validated.
+    %%  validation will occur when the subscription is activated.
+    Stat = case Status2 of
+        undefined -> active;
+        active -> active;
+        inactive -> inactive;
+        BadStatus -> inactive        
+    end,
+    
+    HA = find_and_get_element(element(2, SubscriptionTuple), <<"ha_mode">>, 2),
+    HA2 = case HA of
+        undefined -> undefined;
+        BinHA when is_binary(BinHA) -> binary_to_atom(BinHA, latin1);
+        IntHA when is_integer(IntHA) -> IntHA
+    end,
+    HA3 = case is_valid_ha_mode(HA2) of
+        true -> HA2;
+        false -> undefined
+    end, 
+    
+    LS = find_and_get_element(element(2, SubscriptionTuple), <<"lease_seconds">>, 2),
+    LS2 = case LS of
+        undefined -> undefined;        
+        IntLS when is_integer(IntLS) -> IntLS;
+        _OtherLS -> undefined
+    end,
+    LeaseSeconds = case LS2 of
+        undefined ->  Lease_Micro_Less_ST div 1000000;
+        LS3 -> LS3
+    end,
+    
+
+%% TODO add error handling for all properties
+%%    case lists:member(false, [Callback, Topic, LeaseSeconds, Vhost, ResourceType, ResourceName]) of
+%%        true ->                
+%%        false ->
+    
+    Resource = #resource{virtual_host = Vhost, kind = ResourceType, name = ResourceName},
+    Subscription = #rabbithub_subscription{resource = Resource, topic = Topic, callback = Callback},
+    BatchRecordStatus = case Stat of
+        active ->        
+            case do_validate(Callback, Topic, LeaseSeconds, subscribe, none) of
+                ok -> 
+                    create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3);
+                {error, Reason} -> 
+                    ReasonString = lists:flatten(io_lib:format("~p", [{error, Reason}])),
+                    ReasonString2 = re:replace(re:replace(ReasonString, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),
+                    [{node(), list_to_binary(ReasonString2)}]        
+            end;
+        inactive -> %insert record but do not validate callback url        
+            create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3)
+    end,    
+    BatchRecord  = #rabbithub_batch{subscription = Subscription, lease_expiry_time_microsec = Lease_Micro_Less_ST, status = BatchRecordStatus},
+    ets:insert(TableId, BatchRecord).      
+
+%% GF:  create_subscription calls the create function in rabbithub_subscription and starts the lease
+create_subscription(Callback, Topic, LeaseSeconds, Resource, Status, HA) ->
+    Sub = #rabbithub_subscription{resource = Resource,
+                                topic = Topic,
+                                callback = Callback},
+    HAMode = case HA of
+        undefined ->
+            case application:get_env(rabbithub, ha_consumers) of
+                {ok, Mode} -> Mode;                                                                
+                undefined  -> none                                                                
+            end;
+         OtherModes -> OtherModes
+    end, 
+    case rabbithub_subscription:create(Sub, LeaseSeconds, HAMode, Status) of
+        %% add active inactive check, do not start subs if inactive, shutdown if existing.
+        ok ->   
+            case Status of
+                active ->       
+                    case HAMode of
+                        none -> [{node(), ok}];
+                        _Mode1 ->
+                            Nodes = get_nodes(HAMode),
+                            RPCRes = create_ha_consumers(Nodes, Sub, LeaseSeconds, HAMode, active),
+                            Body = [{node(), ok}] ++ RPCRes,
+                            Body
+                    end;        
+                inactive ->
+                    %% check for existing consumers and stop them if they are running
+                    ExistingConsumers = find_existing_consumers(Sub),
+                    case ExistingConsumers of 
+                        [] ->   
+                            [{node(), ok}];
+                        ConsumerList ->
+                            %% deactivate consumers
+                            RPCRes = deactivate_ha_consumers(Sub),
+                            Body = RPCRes,
+                            Body
+                    end
+            end;
+        {error, not_found} -> 
+            ReasonString = lists:flatten(io_lib:format("~p", [{error, not_found}])),          
+            [{node(), list_to_binary(ReasonString)}];
+        {error, Reason} -> 
+            ReasonString = lists:flatten(io_lib:format("~p", [{error, Reason}])),
+            ReasonString2 = re:replace(re:replace(ReasonString, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),
+            [{node(), list_to_binary(ReasonString2)}] 
+    end.
+
+find_existing_consumers(Subscription) ->    
+    Con = #consumer{subscription = Subscription, node = '_'},
+    WildPattern = mnesia:table_info(rabbithub_subscription_pid, wild_pattern),
+    Pattern = WildPattern#rabbithub_subscription_pid{consumer = Con},
+    F = fun() -> mnesia:match_object(Pattern) end,   
+    {atomic, Results} = mnesia:transaction(F),
+    Results.
+        
+%% GF:  Batch process list of subscriptions
+batch_process_subscriptions(BatchTuple) ->
+    SubList = element(2, lists:nth(1, element(2, BatchTuple))),
+    TableName = rabbithub_batch,
+    TableId = ets:new(TableName, [set, {keypos, 2}]),
+    
+    lists:foreach(fun(N) ->
+                      manage_validation(N, TableId)
+                  end, SubList),
+                  
+    BatchTab = ets:tab2list(TableId),                     
+    BatchTab.
+    
+%% GF: function to convert batch responses to JSON	    
+%%    BatchRecord  = #rabbithub_batch{subscription = Subscription, lease_expiry_time_microsec = LeaseSeconds, status = BatchRecordStatus},
+convert_batch_response_body_to_json(Body) ->           
+    Data = {struct,  [{rabbithub_batch_results, [
+              [{vhost, element(2,(B#rabbithub_batch.subscription)#rabbithub_subscription.resource)},              	              
+               {resource_type, element(3,(B#rabbithub_batch.subscription)#rabbithub_subscription.resource)},
+               {resource_name, element(4,(B#rabbithub_batch.subscription)#rabbithub_subscription.resource)}, 	     
+               {topic, list_to_binary((B#rabbithub_batch.subscription)#rabbithub_subscription.topic)},
+               {callback, list_to_binary((B#rabbithub_batch.subscription)#rabbithub_subscription.callback)},
+               {lease_expiry_time_microsec, B#rabbithub_batch.lease_expiry_time_microsec},
+               {status, convert_response_body_to_tuple(B#rabbithub_batch.status)}]
+	    || B <- Body]}]},
+    Resp = mochijson2:encode(Data),
+    Resp.
+
+convert_response_body_to_tuple(Body) ->
+    Data = {struct,  [{consumers, [
+              [{node, element(1, B)},
+               {status, element(2,B)}]
+	    || B <- Body]}]},
+    Data.   
 
 %% GF: GET current errors for each subscription
 perform_request('GET', subscriptions, '', errors, _Resource, _ParsedQuery, Req) ->
@@ -625,6 +853,7 @@ perform_request('GET', subscriptions, '', errors, _Resource, _ParsedQuery, Req) 
                            end),
      Json = convert_errors_to_json(Errors),
      Req:respond({200, [{"Content-Type", "application/json"}], Json });
+     
 
 %% GF: GET subscriptions returns a list of all leases in the database
 perform_request('GET', subscriptions, '', none, _Resource, _ParsedQuery, Req) ->
@@ -633,28 +862,70 @@ perform_request('GET', subscriptions, '', none, _Resource, _ParsedQuery, Req) ->
                                    mnesia:foldl(fun (Lease, Acc) -> [Lease | Acc] end,
                                                 [],
                                                 rabbithub_lease)
-                           end),
+                           end),                          
      Json = convert_leases_to_json(Leases),
      Req:respond({200, [{"Content-Type", "application/json"}], Json });
+     
+%% GF:  New endpoint to upload Subscriptions in batch
+perform_request('POST', subscriptions, '', none, _Resource, _ParsedQuery, Req) ->    
+     Body = Req:recv_body(), 
+     DecodedBody = mochijson2:decode(Body),
+     Resp = batch_process_subscriptions(DecodedBody),      
+     RespJson = convert_batch_response_body_to_json(Resp),
+     Req:respond({202, [{"Content-Type", "application/json"}], RespJson});
+     
 
 %% GF: Updated to handle message headers for header exchange POSTs
 perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
-    
+    MsgId = case application:get_env(rabbithub, set_message_id) of
+        {ok, _MsgIDHeaderName} -> 
+            rabbit_guid:binary(rabbit_guid:gen(), "rabbithub_msgid");
+        _ ->
+            undefined
+    end,
+    CorrId =  case application:get_env(rabbithub, set_correlation_id) of
+        {ok, CorrIdHeaderName} -> 
+            case Req:get_header_value(CorrIdHeaderName) of
+                undefined -> undefined;
+                HV -> list_to_binary(HV)
+            end;
+        _ -> undefined
+    end,         
+            
+    case MsgId of
+        undefined -> do_nothing;
+        MsgIdValue -> rabbit_log:info("RabbitHub: Message Published for Resource = ~p with message_id = ~p~n", [Resource, MsgIdValue])
+    end,
+    case CorrId of
+        undefined -> do_nothing;
+        CorrIdValue -> rabbit_log:info("RabbitHub:  Message Published for Resource = ~p with correlation_id = ~p~n", [Resource, CorrIdValue])
+    end,
+    case application:get_env(rabbithub, log_http_headers) of
+        {ok, HeaderList} ->
+            lists:foreach(fun(N) -> 
+                                case Req:get_header_value(N) of        
+                                    undefined -> do_nothing;
+                                    HeaderValue ->  rabbit_log:info("RabbitHub: Message HTTP Header ~p = ~p~n", [N, HeaderValue])
+                                end
+                            end, HeaderList);
+        _ ->
+            do_nothing
+    end,
     case Req:get_header_value("x-rabbithub-msg_header") of
         %% no custom HTTP header for headers exchange, publish normal
         undefined ->            
-            Msg = extract_message(Resource, ParsedQuery, Req),
+            Msg = extract_message(Resource, ParsedQuery, MsgId, CorrId, Req),
 	        Delivery = rabbit_basic:delivery(false, false, Msg, undefined),
 	        case rabbit_basic:publish(Delivery) of
-		    {ok,  _} ->
-		        Req:respond({202, [], []});
-		    {error, not_found} ->
-		        Req:not_found()
+		        {ok,  A} ->
+		            Req:respond({202, [], []});
+		        {error, not_found} ->
+		            Req:respond({404, [], "exchange not found"})
 	        end;
 	    %% Custom Header for Headers exchange exists, convert header to message properties
         CustHeaderProps ->
              Proplist = proplist_from_options(CustHeaderProps),
-	         Msg = extract_message(Resource, ParsedQuery, Proplist, Req),
+	         Msg = extract_message(Resource, ParsedQuery, Proplist, MsgId, CorrId, Req),
 	         Delivery = rabbit_basic:delivery(false, false, Msg, undefined),
 	         case rabbit_basic:publish(Delivery) of
 		     {ok,  _} ->
@@ -665,7 +936,42 @@ perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
     end;
 
 perform_request('POST', endpoint, '', queue, Resource, ParsedQuery, Req) ->
-    Msg = extract_message(rabbithub:r(exchange, ""), ParsedQuery, Req),
+
+    MsgId = case application:get_env(rabbithub, set_message_id) of
+        {ok, _MsgIDHeaderName} -> 
+            rabbit_guid:binary(rabbit_guid:gen(), "rabbithub_msgid");
+        _ ->
+            undefined
+    end,
+    CorrId =  case application:get_env(rabbithub, set_correlation_id) of
+        {ok, CorrIdHeaderName} -> 
+            case Req:get_header_value(CorrIdHeaderName) of
+                undefined -> undefined;
+                HV -> list_to_binary(HV)
+            end;
+        _ -> undefined
+    end,            
+    case MsgId of
+        undefined -> do_nothing;
+        MsgIdValue -> rabbit_log:info("RabbitHub: message_id = ~p~n", [MsgIdValue])
+    end,
+    case CorrId of
+        undefined -> do_nothing;
+        CorrIdValue -> rabbit_log:info("RabbitHub: correlation_id = ~p~n", [CorrIdValue])
+    end,
+    case application:get_env(rabbithub, log_http_headers) of
+        {ok, HeaderList} ->
+            lists:foreach(fun(N) -> 
+                                case Req:get_header_value(N) of        
+                                    undefined -> do_nothing;
+                                    HeaderValue ->  rabbit_log:info("RabbitHub: Message HTTP Header ~p = ~p~n", [N, HeaderValue])
+                                end
+                            end, HeaderList);
+        _ ->
+            do_nothing
+    end,
+
+    Msg = extract_message(rabbithub:r(exchange, ""), ParsedQuery, MsgId, CorrId, Req),
     Delivery = rabbit_basic:delivery(false, false, Msg, undefined),
     case rabbit_amqqueue:lookup([Resource]) of
         [Queue] ->
@@ -798,42 +1104,49 @@ perform_request('POST', subscribe, '', ResourceTypeAtom, Resource, _ParsedQuery,
 perform_request('POST', subscribe, subscribe, _ResourceTypeAtom, Resource, ParsedQuery, Req) ->
     validate_subscription_request(Req, ParsedQuery, Resource, subscribe,
                                   fun (Callback, Topic, LeaseSeconds, no_shortcut) ->
-                                          Sub = #rabbithub_subscription{resource = Resource,
-                                                                        topic = Topic,
-                                                                        callback = Callback},
-                                          case rabbithub_subscription:create(Sub, LeaseSeconds) of
-                                              ok -> 
-                                                HubHAConsumer = param(ParsedQuery, "hub.haconsumer", true),
-                                                case HubHAConsumer of
-                                                    true ->
-                                                        case application:get_env(rabbithub, ha_consumers) of
-                                                            {ok, Mode} ->
-                                                                Nodes = get_nodes(Mode),
-                                                                RPCRes = create_ha_consumers(Nodes, Sub, LeaseSeconds),
-                                                                Body = [{node(), ok}] ++ RPCRes,
-                                                                ResponseBody = convert_response_body_to_json(Body),
-                                                                {ok, ResponseBody};
-                                                            _ ->                                              
-                                                                ok
-                                                        end;
-                                                     false -> ok
-                                                end;
-                                                        
-                                              {error, not_found} -> {error, {status, 404}, "queue or exchange not found"};
-                                              {error, _} -> {error, {status, 500}}
-                                          end;
-                                      (_Callback, Topic, _LeaseSeconds, TargetResource) ->
-                                          case rabbit_binding:add(
-                                                 #binding{source      = Resource,
-                                                          destination = TargetResource,
-                                                          key         = list_to_binary(Topic),
-                                                          args        = []}) of
-                                              ok ->
-                                                  ok;
-                                              {error, _} ->
-                                                  {error, {status, 404}}
-                                          end
-                                  end);
+                                    Sub = #rabbithub_subscription{resource = Resource,
+                                                                    topic = Topic,
+                                                                    callback = Callback},
+                                    HubHAConsumer = param(ParsedQuery, "hub.haconsumer", true),
+                                    HAMode = case HubHAConsumer of
+                                        true ->
+                                            case application:get_env(rabbithub, ha_consumers) of
+                                                {ok, Mode} -> Mode;                                                                
+                                                _ -> none                                                                
+                                            end;
+                                         false -> none
+                                    end,                                                                        
+                                    case rabbithub_subscription:create(Sub, LeaseSeconds, HAMode, active) of
+                                        ok ->         
+                                            case HubHAConsumer of
+                                                true ->
+                                                    case HAMode of
+                                                        none -> ok;
+                                                        _Mode1 ->
+                                                            Nodes = get_nodes(HAMode),
+                                                            RPCRes = create_ha_consumers(Nodes, Sub, LeaseSeconds, HAMode, active),
+                                                            Body = [{node(), ok}] ++ RPCRes,
+                                                            ResponseBody = convert_response_body_to_json(Body),
+                                                            {ok, ResponseBody}
+                                                    end;
+                                                 false -> ok
+                                            end;                
+                                        {error, not_found} -> {error, {status, 404}, "queue or exchange not found"};
+                                        {error, _} ->         {error, {status, 500}};
+                                        Err ->                {error, {status, 400}, "Err"}
+                                    end;
+                                    (_Callback, Topic, _LeaseSeconds, TargetResource) ->
+                                      case rabbit_binding:add(
+                                             #binding{source      = Resource,
+                                                      destination = TargetResource,
+                                                      key         = list_to_binary(Topic),
+                                                      args        = []}) of
+                                          ok ->
+                                              ok;
+                                          {error, _} ->
+                                              {error, {status, 404}}
+                                      end
+                                end);
 
 perform_request('POST', subscribe, unsubscribe, _ResourceTypeAtom, Resource, ParsedQuery, Req) ->
     validate_subscription_request(Req, ParsedQuery, Resource, unsubscribe,
@@ -843,12 +1156,12 @@ perform_request('POST', subscribe, unsubscribe, _ResourceTypeAtom, Resource, Par
                                                                         callback = Callback},
                                         %%  ok = rabbithub_subscription:delete(Sub),
                                         %%  ok;
-                                        case rabbithub_subscription:delete(Sub) of
+                                        case rabbithub_subscription:deactivate(Sub) of
                                               ok -> 
                                                 case application:get_env(rabbithub, ha_consumers) of
                                                     {ok, Mode} ->
-                                                        Nodes = get_nodes(Mode),
-                                                        RPCRes = delete_ha_consumers(Nodes, Sub),
+                                                        %Nodes = get_nodes(Mode),
+                                                        RPCRes = deactivate_ha_consumers(Sub),
                                                         Body = [{node(), ok}] ++ RPCRes,
                                                         ResponseBody = convert_response_body_to_json(Body),
                                                         {ok, ResponseBody};
@@ -856,7 +1169,9 @@ perform_request('POST', subscribe, unsubscribe, _ResourceTypeAtom, Resource, Par
                                                         ok
                                                 end;
                                               {error, not_found} -> {error, {status, 404}};
-                                              {error, _} -> {error, {status, 500}}
+                                              {error, Reason} ->
+                                                  rabbit_log:warning("RabbitHub 500 Error during Delete of ~p~n Error: ~p~n", [Sub, Reason]), 
+                                                  {error, {status, 500}} 
                                           end;
                                       (_Callback, Topic, _LeaseSeconds, TargetResource) ->
                                           case rabbit_binding:remove(
@@ -866,10 +1181,53 @@ perform_request('POST', subscribe, unsubscribe, _ResourceTypeAtom, Resource, Par
                                                           args        = []}) of
                                               ok ->
                                                   ok;
-                                              {error, _} ->
+                                              {error, _} ->                                                   
                                                   {error, {status, 404}}
                                           end
                                   end);
+%%delete subscription does not require subscriber to be available                                   
+perform_request('DELETE', subscribe, _HubMode, _ResourceTypeAtom, Resource, ParsedQuery, Req) ->
+    Callback = param(ParsedQuery, "hub.callback", missing),
+    Topic = param(ParsedQuery, "hub.topic", missing),
+
+    case lists:member(missing, [Callback, Topic]) of
+        true ->
+            Req:respond({400, [], "Missing required parameter"});
+        false ->
+            Sub = #rabbithub_subscription{resource = Resource,
+                                            topic = Topic,
+                                            callback = Callback},
+            case rabbithub_subscription:delete(Sub) of
+                ok ->  
+                    case application:get_env(rabbithub, ha_consumers) of                    
+                        {ok, Mode} ->
+                            RPCRes = deactivate_ha_consumers(Sub),
+                            Body = [{node(), ok}] ++ RPCRes,
+                            ResponseBody = convert_response_body_to_json(Body),
+                            Req:respond({200, [{"Content-Type", "application/json"}], ResponseBody }),
+                            {ok, ResponseBody};
+                        _ ->
+                            Body2 = [{node(), ok}],
+                            ResponseBody2 = convert_response_body_to_json(Body2),
+                            Req:respond({200, [{"Content-Type", "application/json"}], ResponseBody2 }),
+                            {ok, ResponseBody2}
+                    end;
+                {error, not_found} -> 
+                    Body3 = [{node(), not_found}],
+                    ResponseBody3 = convert_response_body_to_json(Body3),
+                    Req:respond({404, [{"Content-Type", "application/json"}], ResponseBody3 }),
+                    {error, {status, 404}};
+                {error, Reason} ->  
+                    ReasonString = lists:flatten(io_lib:format("~p", [{error, Reason}])),
+                    ReasonString2 = re:replace(re:replace(ReasonString, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),
+                    ResponseBody4 = [{node(), list_to_binary(ReasonString2)}],
+                    Req:respond({500, [{"Content-Type", "application/json"}], ResponseBody4 }),
+                    rabbit_log:warning("RabbitHub 500 Error during Delete of ~p~n Error: ~p~n", [Sub, Reason]), 
+                    {error, {status, 500}} 
+            end
+    end;    
+%%                                  
+                            
 
 perform_request(Method, Facet, HubMode, _ResourceType, Resource, ParsedQuery, Req) ->
     Xml = {debug_request_echo, [{method, [atom_to_list(Method)]},
@@ -880,8 +1238,8 @@ perform_request(Method, Facet, HubMode, _ResourceType, Resource, ParsedQuery, Re
     rabbit_log:info("RabbitHub performing request ~p~n", [Xml]),
     rabbithub:respond_xml(Req, 200, [], none, Xml).
 
-create_ha_consumers(Nodes, Subscription, LeaseSeconds) ->
-        {Results, BadNodes} = rpc:multicall(Nodes, rabbithub_subscription, create, [Subscription, LeaseSeconds]),
+create_ha_consumers(Nodes, Subscription, LeaseSeconds, HAMode, Status) ->
+        {Results, BadNodes} = rpc:multicall(Nodes, rabbithub_subscription, create, [Subscription, LeaseSeconds, HAMode, Status]),
         %% create list of [{node1, result1}, {node2, result2},...]
         FullResults = lists:append(
             lists:zip(Nodes -- BadNodes, Results),
@@ -891,8 +1249,9 @@ create_ha_consumers(Nodes, Subscription, LeaseSeconds) ->
         RPCResults = [{N, Res} || N <- Nodes, {M, Res} <- FullResults, N == M],
         RPCResults.
         
+%remove after testing is no longer used        
 delete_ha_consumers(Nodes, Subscription) ->
-        {Results, BadNodes} = rpc:multicall(Nodes, rabbithub_subscription, delete, [Subscription]),
+        {Results, BadNodes} = rpc:multicall(Nodes, rabbithub_subscription, delete_local_consumer, [Subscription]),
         %% create list of [{node1, result1}, {node2, result2},...]
         FullResults = lists:append(
             lists:zip(Nodes -- BadNodes, Results),
@@ -901,12 +1260,49 @@ delete_ha_consumers(Nodes, Subscription) ->
         %% restore original order
         RPCResults = [{N, Res} || N <- Nodes, {M, Res} <- FullResults, N == M],
         RPCResults.
-        
+
+deactivate_ha_consumers(Subscription) ->
+        ExistingConsumers = find_existing_consumers(Subscription),
+            case ExistingConsumers of 
+                [] ->
+                    [{node(), ok}];
+                ConsumerList ->
+                    Nodes = [element(3, element(2, C)) || C <- ConsumerList],           
+                    {Results, BadNodes} = rpc:multicall(Nodes, rabbithub_subscription, delete_local_consumer, [Subscription]),
+                    %% remove pid table entries for bad nodes
+                    lists:foreach(fun(N) ->
+                      remove_pid(N, Subscription) end, BadNodes),
+                      
+                    %% create list of [{node1, result1}, {node2, result2},...]
+                    FullResults = lists:append(
+                        lists:zip(Nodes -- BadNodes, Results),
+                        [{BN, {badrpc, nodedown}} || BN <- BadNodes]
+                    ),
+                    %% restore original order
+                    RPCResults = [{N, Res} || N <- Nodes, {M, Res} <- FullResults, N == M],
+                    RPCResults   
+           end.
+            
+remove_pid(N, Subscription) ->
+    Consumer = #consumer{subscription = Subscription, node = N},
+    {atomic, ok} =
+        mnesia:transaction(fun () -> mnesia:delete({rabbithub_subscription_pid, Consumer}) end),
+     ok.   
+
+
+            
 get_nodes(Mode) ->
     case Mode of
         all -> nodes();
         Num when is_integer(Num)-> pick_n_random_nodes(Num, nodes());
         _ -> []
+    end.
+is_valid_ha_mode(Mode) ->
+    case Mode of
+        all -> true;
+        none -> true;
+        Num when is_integer(Num) -> true;
+        _Other -> false
     end.
 
 pick_n_random_nodes(N, _) when N == 0 ->
@@ -914,25 +1310,38 @@ pick_n_random_nodes(N, _) when N == 0 ->
 	
 pick_n_random_nodes(N, List) when N > 0 ->
     ListLen = length(List),
-    NumNodes = case N > ListLen of
-                true ->  ListLen;
-                false -> N
-               end,
-    Index = random:uniform(length(List)),
-    Element = lists:nth(Index,List),
-    Result = [Element] ++ pick_n_random_nodes(NumNodes-1, lists:delete(Element, List)),
-    Result. 
+    case ListLen of
+        0 -> [];
+        _Num -> 
+            NumNodes = case N > ListLen of
+                        true ->  ListLen;
+                        false -> N
+                       end,
+            Index = random:uniform(length(List)),
+            Element = lists:nth(Index,List),
+            Result = [Element] ++ pick_n_random_nodes(NumNodes-1, lists:delete(Element, List)),
+            Result
+    end.
             
 %% GF: function to convert list of node responses to JSON	    
 convert_response_body_to_json(Body) ->
     Data = {struct,  [{consumers, [
               [{node, element(1, B)},
-               {status, element(2,B)}]
+               {status, convert_status(element(2,B))}]
 	    || B <- Body]}]},
     Resp = mochijson2:encode(Data),
     Resp.
     
-            
+convert_status(Value) ->
+    case Value of
+        ValueAtom when is_atom(Value) -> Value;
+        ValueBinary when is_binary(Value) -> Value;
+        Other when is_tuple(Value) ->
+            ValueString1 = lists:flatten(io_lib:format("~p", [Other])),
+            ValueString2 = re:replace(re:replace(ValueString1, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),
+            list_to_binary(ValueString2)
+    end.
+                        
 
 handle_hub_post(Req) ->
     Req:respond({200, [], "You posted!"}).
