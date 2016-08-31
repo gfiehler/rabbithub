@@ -218,6 +218,8 @@ a rabbitmq message properties used by headers exchanges for routing messages to 
 ### Export List of Subscribers
 The following api will return a json formatted list of the current subscribers for RabbitHub.
 
+<mark>Note:  both import and export of subscribers requires a user with rabbitmq tags (roles)  `administrator,rabbithub_admin`</mark>
+
 `curl --request GET http://guest:guest@localhost:15670/subscriptions`
   
  - vhost:  vhost
@@ -256,6 +258,8 @@ The following api will return a json formatted list of the current subscribers f
 ```
 ### Import Subscribers in Batch
 The file that was exported in the previous section can then be imported with the following API
+
+<mark>Note:  both import and export of subscribers requires a user with rabbitmq tags (roles)  `administrator,rabbithub_admin`</mark>
 
 ```javascript
   curl -d '{"subscriptions":[{"vhost":"/","resource_type":"queue","resource_name":"ha.q2","topic":"ha.q2","callback":"http://RabbitErl19:8999/rabbithub/s2","lease_expiry_time_microsec":1472716785983474, "lease_seconds":1000000,"ha_mode":"none","status":"active"}, {"vhost":"/","resource_type":"queue","resource_name":"ha.q1","topic":"ha.q1","callback":"http://callbackdomain/subscriber/s2", "lease_expiry_time_microsec":1472733774026491, "lease_seconds":1000000,"ha_mode":"none","status":"active"}, {"vhost":"/","resource_type":"queue","resource_name":"ha.q1","topic":"test","callback":"http://callbackdomain/subscriber/s2", "lease_expiry_time_microsec":1472733774026491,"lease_seconds":1000000,"ha_mode":"none","status":"inactive"}]}' --header "content-type:application/json" http://guest:guest@localhost:15670/subscriptions
