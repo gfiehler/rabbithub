@@ -54,7 +54,7 @@ check_authn_roles(Uname, Roles) ->
         {refused, _, _, _} ->
             {error, access_refused};                                                     
 %%        {ok,{user,_,_,_}} -> 
-        {ok,{user,A,B,C}} -> 
+        {ok,{user,_A,B,_C}} -> 
             case lists:all(fun(X) -> lists:member(X, B) end, Roles) of
                 true  -> 
                     {ok, user};
@@ -107,7 +107,7 @@ check_auth_info(AuthInfo) ->
         {refused, _, _, _} ->
             {error, access_refused};                                                     
 %%        {ok,{user,_,_,_}} -> 
-        {ok,{user,A,B,C}} -> 
+        {ok,{user,_A,_B,_C}} -> 
             {ok, User};
         _ ->
             {error, access_refused}

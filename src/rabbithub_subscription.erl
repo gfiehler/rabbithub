@@ -1,7 +1,7 @@
 -module(rabbithub_subscription).
 
 -export([start_subscriptions/0]).
--export([create/4, delete/1, deactivate/1]).
+-export([create/5, delete/1, deactivate/1]).
 -export([start_link/1]).
 -export([register_subscription_pid/3, erase_subscription_pid/1, delete_local_consumer/1]).
 
@@ -34,16 +34,32 @@ start_subscriptions() ->
                            end),
     lists:foreach(fun start/1, Leases).
 
-create(Subscription, LeaseSeconds, HAMode, Status) ->
+create(Subscription, LeaseSeconds, HAMode, MaxTps, Status) ->
     rabbithub_consumer:erase_subscription_err(Subscription),
     RequestedExpiryTime = system_time() + LeaseSeconds * 1000000,    
     Lease = #rabbithub_lease{subscription = Subscription,
                              lease_expiry_time_microsec = RequestedExpiryTime,
                              lease_seconds = LeaseSeconds,
                              ha_mode = HAMode,
-                             status = Status},
-    {atomic, ok} = mnesia:transaction(fun () -> ok = mnesia:write(Lease) end),
-    start(Lease).
+                             status = Status,
+                             max_tps = MaxTps},
+                             
+                             
+    {atomic, Result} = mnesia:sync_transaction(
+        fun () ->            
+            case mnesia:read(rabbithub_lease, Subscription) of
+                [ExistingRecord] ->                
+                    UpdatedRecord = ExistingRecord#rabbithub_lease{lease_expiry_time_microsec = RequestedExpiryTime, 
+                                        lease_seconds = LeaseSeconds, ha_mode = HAMode, status = Status, max_tps = MaxTps },
+                    {atomic, ok} = mnesia:transaction(fun () ->                         
+                        ok = mnesia:write(UpdatedRecord) end),
+                    UpdatedRecord;                        
+                [] -> 
+                    {atomic, ok} = mnesia:transaction(fun () -> ok = mnesia:write(Lease) end),
+                    Lease                  
+            end
+        end),
+    start(Result).
     
     
 %%GF changing unsubscription to set status to inactive instead of deleting from table
@@ -79,25 +95,64 @@ update_lease_status(Subscription, Status) ->
 
     mnesia:transaction(LeaseUpdateFun).
     
+update_lease_pseudo_queue(Subscription, Q) ->
+    LeaseUpdateFun = fun() ->
+        [L] = mnesia:read({rabbithub_lease, Subscription}),        
+        mnesia:write(L#rabbithub_lease{pseudo_queue = Q})
+    end,
 
+    mnesia:transaction(LeaseUpdateFun).
 
 delete(Subscription) ->
     Consumer = #consumer{subscription = Subscription, node = node()},
     rabbit_log:info("RabbitHub deleting subscription~n~p~n", [Consumer]),
     R3 = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Subscription}) end),
-    case R3 of
+    R4 = case R3 of
         {atomic, []} ->
             {error, not_found};       
-        {atomic, X} ->
-            R1 = mnesia:transaction(fun () -> mnesia:delete({rabbithub_lease, Subscription}) end),                    
-            delete_local_consumer(Subscription);
+        {atomic, [Lease]} ->
+            _R1 = mnesia:transaction(fun () -> mnesia:delete({rabbithub_lease, Subscription}) end),                    
+            delete_local_consumer(Subscription, Lease),
+            Lease;
         {aborted, Reason} -> 
             {error, Reason}
+    end,
+    case R4 of
+        {error, Reason2} -> {error, Reason2};
+        L2 ->            
+            Resource2 = (L2#rabbithub_lease.subscription)#rabbithub_subscription.resource,                  
+            ResourceType = Resource2#resource.kind,                  
+            case ResourceType of
+                queue -> ok;
+                exchange ->
+                    case application:get_env(rabbithub, use_internal_queue_for_pseudo_queue) of
+                        {ok, false} ->
+                            %% if resource type = exchange and env = false, delete psuedo_queue            
+                            PseudoQueue = L2#rabbithub_lease.pseudo_queue,
+                            QueueName = PseudoQueue#amqqueue.name,        
+                            case rabbit_amqqueue:lookup(QueueName) of
+                                {error, not_found} ->
+                                    rabbit_log:info("RabbitHub error deleting Pseudo Queue ~p Reason not found.~nFor Subscription ~p~n", 
+                                        [QueueName,Subscription]);
+                                {ok, Q} ->
+                                    {ok, PurgedMessageCount} = rabbit_amqqueue:delete(Q, false, false),
+                                    rabbit_log:info("RabbitHub deleted pseudo queue ~p with ~p messages purged~n for Subscription ~p~n", 
+                                        [QueueName, PurgedMessageCount, Subscription])
+                            end,
+                            ok;
+                        %% If usings standard pseudo queue then do nothing, queue aleady deleted.    
+                        _ -> ok
+                end
+            end
     end.
-    
+                 
+
 delete_local_consumer(Subscription) ->
+    {atomic, [Lease]} = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Subscription}) end), 
+    delete_local_consumer(Subscription, Lease).
+    
+delete_local_consumer(Subscription, _Lease) ->
     Consumer = #consumer{subscription = Subscription, node = node()},
-    rabbit_log:info("RabbitHub deleting Consumer~p~n", [Consumer]),
     Consumers =        
          mnesia:transaction(
               fun () ->
@@ -106,12 +161,14 @@ delete_local_consumer(Subscription) ->
                       SubPids1
               end),          
     {atomic, SubPids2} = Consumers,
+    %% cancel all local consumers should only be one
     lists:foreach(fun (#rabbithub_subscription_pid{pid = Pid,
                                                    expiry_timer = TRef}) ->
                           {ok, cancel} = timer:cancel(TRef),
                           gen_server:cast(Pid, shutdown)
                   end, SubPids2),
-    ok.     
+    ok.                  
+     
 
 
 
@@ -125,10 +182,79 @@ start_link(Lease =
                                                     #resource{kind = ResourceTypeAtom}}}) ->
     case ResourceTypeAtom of
         exchange ->
-            gen_server:start_link(rabbithub_pseudo_queue, [Lease], []);
+            case application:get_env(rabbithub, use_internal_queue_for_pseudo_queue) of
+                {ok, false} ->                    
+                    case create_and_bind_pseudo_queue(Lease) of
+                        {stop, not_found} -> {stop, not_found};
+                        Resource ->                             
+                            gen_server:start_link(rabbithub_consumer, [Lease, Resource], [])
+                    end; 
+                _ ->
+                    gen_server:start_link(rabbithub_pseudo_queue, [Lease], [])
+            end;
         queue ->
             gen_server:start_link(rabbithub_consumer, [Lease], [])
     end.
+
+create_and_bind_pseudo_queue(Lease = #rabbithub_lease{subscription =
+                             #rabbithub_subscription{resource =
+                              #resource{virtual_host = VHost, kind = _ResourceTypeAtom, name = ExchangeNameBin}, topic = Topic}}) ->
+    %%check for existing record and pseudo queue
+    {atomic, ResultPQ} =
+        mnesia:transaction(
+          fun () ->
+              Subscription = Lease#rabbithub_lease.subscription,
+              case mnesia:read(rabbithub_lease, Subscription) of
+                  [ExistingRecord] ->
+                      ExistingPseudoQueue = ExistingRecord#rabbithub_lease.pseudo_queue,
+                      case ExistingPseudoQueue of
+                          undefined -> create_new_queue;
+                          PQ -> PQ
+                      end                      
+              end
+    end),
+    case ResultPQ of 
+        create_new_queue ->
+            %% generate queue_name                          
+            QueueNameBin = rabbit_guid:binary(rabbit_guid:gen(), "amq.http.pseudoqueue"),
+            QueueResource = #resource{virtual_host = VHost, kind = queue, name = QueueNameBin},
+            %% create queue if it does not already exist
+            Q = case rabbit_amqqueue:lookup(QueueResource) of
+                {ok, _} ->
+                    already_exists;
+                {error, not_found} ->
+                    {new, Qrec} = rabbit_amqqueue:declare(QueueResource, true, false, [], none),
+                    Qrec
+            end,
+            %% bind queue to exchange
+            Resource = #resource{virtual_host = VHost, kind = exchange, name = ExchangeNameBin},
+            case rabbit_binding:add(#binding{source     = Resource,
+                                            destination = QueueResource,
+                                            key         = list_to_binary(Topic),
+                                            args        = []}) of        
+                ok ->
+                    {atomic, _Result} =
+                        mnesia:sync_transaction(
+                          fun () ->
+                              Subscription = Lease#rabbithub_lease.subscription,
+                              case mnesia:read(rabbithub_lease, Subscription) of
+                                  [ExistingRecord] ->
+                                      ok = mnesia:write(ExistingRecord#rabbithub_lease{pseudo_queue = Q})
+                              end
+                    end),
+                    QueueResource;
+                {error, exchange_not_found} ->
+                    {stop, not_found};
+                _Err ->
+                    {stop, not_found}
+                
+            end;
+        ExistingPQResource ->  
+            ExistingPQResource#amqqueue.name                                     
+    end.
+             
+       
+
 
 start(Lease) ->
     case Lease#rabbithub_lease.status of
@@ -142,7 +268,7 @@ start(Lease) ->
                 {error, Reason} ->
                     {error, Reason}
             end;
-        Other ->
+        _Other ->
             ok
     end.
 

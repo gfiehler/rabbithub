@@ -37,6 +37,7 @@ really_init(Subscription = #rabbithub_subscription{resource = Resource,
     QueueName = rabbithub:r(queue, rabbit_guid:binary(rabbit_guid:gen(), "amq.http.pseudoqueue")),
     Q = pseudo_queue(QueueName, self()),
     Q = rabbit_amqqueue:internal_declare(Q, false),
+
    case rabbit_binding:add(#binding{source      = Resource,
                                     destination = QueueName,
                                     key         = list_to_binary(Topic),

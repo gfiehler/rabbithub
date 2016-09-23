@@ -9,7 +9,7 @@
 -export([default_username/0]).
 -export([r/3,r/2]).
 -export([respond_xml/5]).
--export([deliver_via_post/3, error_and_unsub/2]).
+-export([deliver_via_post/3, error_and_unsub/2, error_and_delete_sub/2]).
 
 -export([init/1]).
 
@@ -264,7 +264,7 @@ format_xheader({K, _T, V}) ->
 format_headers(Headers) ->
     string:join(lists:map(fun format_xheader/1, Headers), ", ").        
 
-deliver_via_post(#rabbithub_subscription{callback = Callback},
+deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
                  #basic_message{routing_keys = [RoutingKeyBin | _],
                                 content = Content0 = #content{payload_fragments_rev = PayloadRev}},
                  ExtraHeaders) ->
@@ -319,7 +319,7 @@ deliver_via_post(#rabbithub_subscription{callback = Callback},
            MsgHdrs = case MsgHeaders of
                 undefined -> 
                     undefined;
-                MsgHdrsTmp -> 
+                _MsgHdrsTmp -> 
                     format_headers(MsgHeaders)                
            end,
            
@@ -330,30 +330,39 @@ deliver_via_post(#rabbithub_subscription{callback = Callback},
 					  
                 {MId, undefined, undefined} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}| ExtraHeaders];
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, 
+					  {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}| ExtraHeaders];
 			    {undefined, undefined, MH} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders];
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, 
+					  {"x-rabbithub-msg_header", MH} | ExtraHeaders];
 				
 				{undefined, CId, undefined} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, {atom_to_list(CorrIdHeaderName), binary_to_list(CId)} | ExtraHeaders];
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, 
+					  {atom_to_list(CorrIdHeaderName), binary_to_list(CId)} | ExtraHeaders];
 					  
 			    {undefined, CId, MH} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, {atom_to_list(CorrIdHeaderName), binary_to_list(CId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders];
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, 
+					  {atom_to_list(CorrIdHeaderName), binary_to_list(CId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders];
 					  
 			    {MId, undefined, MH} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},{atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders];		  
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},
+					  {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders];		  
 					  
 		        {MId, CId, undefined} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},{atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, {atom_to_list(CorrIdHeaderName), binary_to_list(CId)} | ExtraHeaders];					  			    
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},
+					  {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, 
+					  {atom_to_list(CorrIdHeaderName), binary_to_list(CId)} | ExtraHeaders];					  			    
 									  
 				{MId, CId, MH} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},{atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, {atom_to_list(CorrIdHeaderName), binary_to_list(CId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders]					  	  
+					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},
+					  {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, {atom_to_list(CorrIdHeaderName), binary_to_list(CId)}, 
+					  {"x-rabbithub-msg_header", MH} | ExtraHeaders]					  	  
                                                 		        
           end, 
            
@@ -370,7 +379,15 @@ deliver_via_post(#rabbithub_subscription{callback = Callback},
 					ok
 		   end,
 		   
-           case httpc:request(post, Payload, [], []) of
+           HttpReqOpts = case application:get_env(rabbithub, http_request_options) of
+				{ok, Opts} ->
+					Opts;
+				_ ->
+					[]
+		   end,
+		   		   
+		   BeforeReqTimeMicro = rabbithub_subscription:system_time(),
+           HTTPResp = case httpc:request(post, Payload, HttpReqOpts, []) of
                {ok, {{_Version, StatusCode, _StatusText}, _Headers, _Body}} ->
                   if
                      StatusCode >= 200 andalso StatusCode < 300 ->
@@ -380,22 +397,87 @@ deliver_via_post(#rabbithub_subscription{callback = Callback},
                   end;
                {error, Reason} ->
                    {error, Reason, {}}
-            end;
+           end,
+   		   AfterReqTimeMicro = rabbithub_subscription:system_time(),
+   		   
+   		   %% check for throttling   		              
+           R3 = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Subscription}) end),
+           Subs = case R3 of
+                {atomic, []} ->
+                    [];       
+                {atomic, X} ->
+                    X;
+                {aborted, Reason2} -> 
+                    {error, Reason2}
+           end,
+           Sub = lists:nth(1, Subs),
+           MaxTps = Sub#rabbithub_lease.max_tps,
+           case MaxTps of
+               0 -> ok;
+               N when N > 0 ->                   
+                   %% get consumer list for this subscription
+                   Con = #consumer{subscription = Subscription, node = '_'},    
+                   WildPattern = mnesia:table_info(rabbithub_subscription_pid, wild_pattern),
+                   Pattern = WildPattern#rabbithub_subscription_pid{consumer = Con},
+                   F = fun() -> mnesia:match_object(Pattern) end,   
+                   {atomic, Results} = mnesia:transaction(F),
+                              
+                   NoConsumers = length(Results),
+                   ConsumerTPS = MaxTps / NoConsumers,
+                   ConsumerSPT = 1 / ConsumerTPS,
+                   ConsumerSPTMilli = ConsumerSPT * 1000,
+                   TransactionTimeMicro = AfterReqTimeMicro - BeforeReqTimeMicro,
+                   TransactionTimeMilli = TransactionTimeMicro / 1000,
+                   Delay = ConsumerSPTMilli - TransactionTimeMilli,
+                   case Delay of                    
+                       D when D > 0 ->
+                           case application:get_env(rabbithub, log_maxtps_delay) of
+				               {ok, true} -> 
+                                  rabbit_log:info("RabbitHub max tps of ~p with ~p consumers.  Delay ~p milliseconds~n For Subscription ~p", 
+                                            [MaxTps, NoConsumers, round(Delay), Subscription]);
+                               _ -> ok
+                           end,
+                           timer:sleep(round(Delay));
+                       _ -> ok
+                   end                  
+           end,          
+           HTTPResp;
+   		   
         _ ->
             {error, invalid_callback_url, {}}
     end.
 
+error_and_delete_sub(Subscription, ErrorReport) ->
+    rabbit_log:error("RabbitHub error~n~p~n", [ErrorReport]),
+	rabbithub_subscription:delete(Subscription).
 
 error_and_unsub(Subscription, ErrorReport) ->
     rabbit_log:error("RabbitHub post error~n~p~n", [ErrorReport]),
-	
-	% Check the environment variable unsubscribe_on_http_post_error to 
-	% determine if the subscription should be deleted or not - default 
-	% is to unsubscribe on any post error
-	case application:get_env(rabbithub, unsubscribe_on_http_post_error) of
-		{ok, false} ->
-			ok;
-		_ ->
-		   rabbithub_subscription:delete(Subscription)
+	%% If unsubscribe_on_http_post_error_limit and unsubscribe_on_http_post_error_timeout_milliseconds
+	%%  are set then unsubscribe_on_http_post_error is not allowed to override.
+	%%
+	%%  If they are not set check the environment variable unsubscribe_on_http_post_error to 
+	%%  determine if the subscription should be deleted or not - default 
+	%%  is to unsubscribe on any post error
+	case application:get_env(rabbithub, unsubscribe_on_http_post_error_limit) of
+        {ok, ErrorLimit} when is_integer(ErrorLimit)->
+            case application:get_env(rabbithub, unsubscribe_on_http_post_error_timeout_milliseconds) of
+                {ok, ErrorTimeout} when is_integer(ErrorTimeout)->  
+                    rabbithub_subscription:deactivate(Subscription);
+                _ -> 
+                    case application:get_env(rabbithub, unsubscribe_on_http_post_error) of
+		                {ok, false} ->
+			                ok;
+		                _ ->
+		                   rabbithub_subscription:deactivate(Subscription)
+	                end
+	        end;
+        _ ->
+		    case application:get_env(rabbithub, unsubscribe_on_http_post_error) of
+		        {ok, false} ->
+			        ok;
+		        _ ->
+		           rabbithub_subscription:deactivate(Subscription)
+	        end
 	end,
     ok.

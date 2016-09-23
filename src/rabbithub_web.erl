@@ -494,6 +494,14 @@ extract_lease_seconds(ParsedQuery) ->
         Value ->
             Value
     end.
+    
+extract_maxtps(ParsedQuery) ->
+    case catch list_to_integer(param(ParsedQuery, "hub.maxtps", 0)) of
+        {'EXIT', _Reason} -> 0;
+        InvalidValue when InvalidValue =< 0 -> 0;
+        Value -> Value
+    end.
+        
 %%subscribing or unsubscribing a subscription does require the subscriber to be available
 validate_subscription_request(Req, ParsedQuery, SourceResource, ActualUse, Fun) ->
     Callback = param(ParsedQuery, "hub.callback", missing),
@@ -646,10 +654,16 @@ convert_errors_to_json(Errors) ->
                {error_count, Error#rabbithub_subscription_err.error_count},
                {first_error_time_microsec, Error#rabbithub_subscription_err.first_error_time_microsec},
                {last_error_time_microsec, Error#rabbithub_subscription_err.last_error_time_microsec},
-               {last_error_msg, Error#rabbithub_subscription_err.last_error_msg}]
+               {last_error_msg, list_to_binary(lists:flatten(io_lib:format("~p", [[Error#rabbithub_subscription_err.last_error_msg]])))}]
 	    || Error <- Errors]}]},
     Resp = mochijson2:encode(Data),
     Resp.
+
+convert_amq_to_binary(Amq) ->
+    Flat = lists:flatten(io_lib:format("~p", [[Amq]])),
+    AmqString = re:replace(re:replace(Flat, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),
+    AmqBinary = list_to_binary(AmqString),
+    AmqBinary.
 
 %% GF: function to convert list of leases from database to JSON
 
@@ -663,7 +677,8 @@ convert_leases_to_json(Leases) ->
                {lease_expiry_time_microsec, Lease#rabbithub_lease.lease_expiry_time_microsec},
                {lease_seconds, Lease#rabbithub_lease.lease_seconds},
                {ha_mode, Lease#rabbithub_lease.ha_mode},
-               {status, Lease#rabbithub_lease.status}]
+               {status, Lease#rabbithub_lease.status},
+               {pseudo_queue, convert_amq_to_binary(Lease#rabbithub_lease.pseudo_queue)}]
 	    || Lease <- Leases]}]},
     Resp = mochijson2:encode(Data),
     Resp.
@@ -703,7 +718,7 @@ manage_validation(SubscriptionTuple, TableId) ->
         undefined -> active;
         active -> active;
         inactive -> inactive;
-        BadStatus -> inactive        
+        _BadStatus -> inactive        
     end,
     
     HA = find_and_get_element(element(2, SubscriptionTuple), <<"ha_mode">>, 2),
@@ -728,7 +743,12 @@ manage_validation(SubscriptionTuple, TableId) ->
         LS3 -> LS3
     end,
     
-
+    MaxTps = find_and_get_element(element(2, SubscriptionTuple), <<"maxtps">>, 2),
+    MaxTps2 = case MaxTps of
+        undefined -> 0;
+        N when is_integer(N) -> N;
+        _Other -> 0
+    end,
 %% TODO add error handling for all properties
 %%    case lists:member(false, [Callback, Topic, LeaseSeconds, Vhost, ResourceType, ResourceName]) of
 %%        true ->                
@@ -740,20 +760,25 @@ manage_validation(SubscriptionTuple, TableId) ->
         active ->        
             case do_validate(Callback, Topic, LeaseSeconds, subscribe, none) of
                 ok -> 
-                    create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3);
+                    create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3, MaxTps2);
                 {error, Reason} -> 
                     ReasonString = lists:flatten(io_lib:format("~p", [{error, Reason}])),
                     ReasonString2 = re:replace(re:replace(ReasonString, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),
                     [{node(), list_to_binary(ReasonString2)}]        
             end;
         inactive -> %insert record but do not validate callback url        
-            create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3)
-    end,    
-    BatchRecord  = #rabbithub_batch{subscription = Subscription, lease_expiry_time_microsec = Lease_Micro_Less_ST, status = BatchRecordStatus},
+            create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3, MaxTps)
+    end,  
+    {atomic, CurrentLeaseList} = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Subscription}) end),  
+    CurrentLease = lists:nth(1, CurrentLeaseList),
+        
+    BatchRecord  = #rabbithub_batch{subscription = Subscription, 
+                        lease_expiry_time_microsec = CurrentLease#rabbithub_lease.lease_expiry_time_microsec, 
+                        status = BatchRecordStatus},
     ets:insert(TableId, BatchRecord).      
 
 %% GF:  create_subscription calls the create function in rabbithub_subscription and starts the lease
-create_subscription(Callback, Topic, LeaseSeconds, Resource, Status, HA) ->
+create_subscription(Callback, Topic, LeaseSeconds, Resource, Status, HA, MaxTps) ->
     Sub = #rabbithub_subscription{resource = Resource,
                                 topic = Topic,
                                 callback = Callback},
@@ -765,7 +790,8 @@ create_subscription(Callback, Topic, LeaseSeconds, Resource, Status, HA) ->
             end;
          OtherModes -> OtherModes
     end, 
-    case rabbithub_subscription:create(Sub, LeaseSeconds, HAMode, Status) of
+    
+    case rabbithub_subscription:create(Sub, LeaseSeconds, HAMode, MaxTps, Status) of
         %% add active inactive check, do not start subs if inactive, shutdown if existing.
         ok ->   
             case Status of
@@ -774,7 +800,7 @@ create_subscription(Callback, Topic, LeaseSeconds, Resource, Status, HA) ->
                         none -> [{node(), ok}];
                         _Mode1 ->
                             Nodes = get_nodes(HAMode),
-                            RPCRes = create_ha_consumers(Nodes, Sub, LeaseSeconds, HAMode, active),
+                            RPCRes = create_ha_consumers(Nodes, Sub, LeaseSeconds, HAMode, MaxTps, active),
                             Body = [{node(), ok}] ++ RPCRes,
                             Body
                     end;        
@@ -784,7 +810,7 @@ create_subscription(Callback, Topic, LeaseSeconds, Resource, Status, HA) ->
                     case ExistingConsumers of 
                         [] ->   
                             [{node(), ok}];
-                        ConsumerList ->
+                        _ConsumerList ->
                             %% deactivate consumers
                             RPCRes = deactivate_ha_consumers(Sub),
                             Body = RPCRes,
@@ -869,10 +895,15 @@ perform_request('GET', subscriptions, '', none, _Resource, _ParsedQuery, Req) ->
 %% GF:  New endpoint to upload Subscriptions in batch
 perform_request('POST', subscriptions, '', none, _Resource, _ParsedQuery, Req) ->    
      Body = Req:recv_body(), 
-     DecodedBody = mochijson2:decode(Body),
-     Resp = batch_process_subscriptions(DecodedBody),      
-     RespJson = convert_batch_response_body_to_json(Resp),
-     Req:respond({202, [{"Content-Type", "application/json"}], RespJson});
+     try mochijson2:decode(Body) of
+         DecodedBody ->             
+             Resp = batch_process_subscriptions(DecodedBody),      
+             RespJson = convert_batch_response_body_to_json(Resp),
+             Req:respond({202, [{"Content-Type", "application/json"}], RespJson})
+     catch
+         _:_ -> Req:respond({400, [], "invalide json"})
+     end;
+     
      
 
 %% GF: Updated to handle message headers for header exchange POSTs
@@ -894,20 +925,21 @@ perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
             
     case MsgId of
         undefined -> do_nothing;
-        MsgIdValue -> rabbit_log:info("RabbitHub: Message Published for Resource = ~p with message_id = ~p~n", [Resource, MsgIdValue])
+        MsgIdValue ->  rabbit_log:info("RabbitHub:  Message Published for Resource ~p~n with message id: ~p~n", [Resource, MsgIdValue])
     end,
     case CorrId of
         undefined -> do_nothing;
-        CorrIdValue -> rabbit_log:info("RabbitHub:  Message Published for Resource = ~p with correlation_id = ~p~n", [Resource, CorrIdValue])
+        CorrIdValue -> rabbit_log:info("RabbitHub:  Message Published for Resource ~p~n with correlation id: ~p~n", [Resource, CorrIdValue])
     end,
     case application:get_env(rabbithub, log_http_headers) of
         {ok, HeaderList} ->
             lists:foreach(fun(N) -> 
-                                case Req:get_header_value(N) of        
-                                    undefined -> do_nothing;
-                                    HeaderValue ->  rabbit_log:info("RabbitHub: Message HTTP Header ~p = ~p~n", [N, HeaderValue])
-                                end
-                            end, HeaderList);
+                case Req:get_header_value(N) of        
+                    undefined -> do_nothing;
+                    HeaderValue ->  rabbit_log:info("RabbitHub:  Message Published for Resource ~p~n with HTTP Header: ~p = ~p~n", 
+                                        [Resource, N, HeaderValue])
+                end
+                end, HeaderList);
         _ ->
             do_nothing
     end,
@@ -917,7 +949,7 @@ perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
             Msg = extract_message(Resource, ParsedQuery, MsgId, CorrId, Req),
 	        Delivery = rabbit_basic:delivery(false, false, Msg, undefined),
 	        case rabbit_basic:publish(Delivery) of
-		        {ok,  A} ->
+		        {ok,  _A} ->
 		            Req:respond({202, [], []});
 		        {error, not_found} ->
 		            Req:respond({404, [], "exchange not found"})
@@ -953,18 +985,19 @@ perform_request('POST', endpoint, '', queue, Resource, ParsedQuery, Req) ->
     end,            
     case MsgId of
         undefined -> do_nothing;
-        MsgIdValue -> rabbit_log:info("RabbitHub: message_id = ~p~n", [MsgIdValue])
+        MsgIdValue -> rabbit_log:info("RabbitHub: Message Published for Resource ~p~n with message_id = ~p~n", [Resource, MsgIdValue])
     end,
     case CorrId of
         undefined -> do_nothing;
-        CorrIdValue -> rabbit_log:info("RabbitHub: correlation_id = ~p~n", [CorrIdValue])
+        CorrIdValue -> rabbit_log:info("RabbitHub: Message Published for Resource ~p~n with correlation_id = ~p~n", [Resource, CorrIdValue])
     end,
     case application:get_env(rabbithub, log_http_headers) of
         {ok, HeaderList} ->
             lists:foreach(fun(N) -> 
                                 case Req:get_header_value(N) of        
                                     undefined -> do_nothing;
-                                    HeaderValue ->  rabbit_log:info("RabbitHub: Message HTTP Header ~p = ~p~n", [N, HeaderValue])
+                                    HeaderValue ->  rabbit_log:info("RabbitHub: Message Published for Resource ~p~n with HTTP Header ~p = ~p~n", 
+                                        [Resource, N, HeaderValue])
                                 end
                             end, HeaderList);
         _ ->
@@ -1102,7 +1135,25 @@ perform_request('POST', subscribe, '', ResourceTypeAtom, Resource, _ParsedQuery,
     end;
 
 perform_request('POST', subscribe, subscribe, _ResourceTypeAtom, Resource, ParsedQuery, Req) ->
-    validate_subscription_request(Req, ParsedQuery, Resource, subscribe,
+    Cont = case Resource#resource.kind of
+        queue ->
+            case rabbit_amqqueue:lookup(Resource) of
+                {error, not_found} -> 
+                    Req:respond({404, [{"Content-Type", "text/html"}], "queue or exchange not found"}),
+                    error;
+                {ok, _Q} -> ok
+             end;
+         exchange ->
+             case rabbit_exchange:lookup(Resource) of
+                {ok, _} -> ok;                    
+                {error, not_found} -> 
+                    Req:respond({404, [{"Content-Type", "text/html"}], "queue or exchange not found"}),
+                    error
+             end
+    end,
+    case Cont of
+        ok ->
+            validate_subscription_request(Req, ParsedQuery, Resource, subscribe,
                                   fun (Callback, Topic, LeaseSeconds, no_shortcut) ->
                                     Sub = #rabbithub_subscription{resource = Resource,
                                                                     topic = Topic,
@@ -1115,16 +1166,17 @@ perform_request('POST', subscribe, subscribe, _ResourceTypeAtom, Resource, Parse
                                                 _ -> none                                                                
                                             end;
                                          false -> none
-                                    end,                                                                        
-                                    case rabbithub_subscription:create(Sub, LeaseSeconds, HAMode, active) of
-                                        ok ->         
+                                    end,                                                       
+                                    MaxTps = extract_maxtps(ParsedQuery),     
+                                    case rabbithub_subscription:create(Sub, LeaseSeconds, HAMode, MaxTps, active) of
+                                        ok ->                                             
                                             case HubHAConsumer of
                                                 true ->
                                                     case HAMode of
                                                         none -> ok;
                                                         _Mode1 ->
                                                             Nodes = get_nodes(HAMode),
-                                                            RPCRes = create_ha_consumers(Nodes, Sub, LeaseSeconds, HAMode, active),
+                                                            RPCRes = create_ha_consumers(Nodes, Sub, LeaseSeconds, HAMode, MaxTps, active),
                                                             Body = [{node(), ok}] ++ RPCRes,
                                                             ResponseBody = convert_response_body_to_json(Body),
                                                             {ok, ResponseBody}
@@ -1133,7 +1185,7 @@ perform_request('POST', subscribe, subscribe, _ResourceTypeAtom, Resource, Parse
                                             end;                
                                         {error, not_found} -> {error, {status, 404}, "queue or exchange not found"};
                                         {error, _} ->         {error, {status, 500}};
-                                        Err ->                {error, {status, 400}, "Err"}
+                                        Err ->                {error, {status, 400}, lists:flatten(io_lib:format("~p", [Err]))}
                                     end;
                                     (_Callback, Topic, _LeaseSeconds, TargetResource) ->
                                       case rabbit_binding:add(
@@ -1147,19 +1199,19 @@ perform_request('POST', subscribe, subscribe, _ResourceTypeAtom, Resource, Parse
                                               {error, {status, 404}}
                                       end
                                 end);
+        _ -> do_nothing                                                                
+    end;                          
 
 perform_request('POST', subscribe, unsubscribe, _ResourceTypeAtom, Resource, ParsedQuery, Req) ->
     validate_subscription_request(Req, ParsedQuery, Resource, unsubscribe,
                                   fun (Callback, Topic, _LeaseSeconds, no_shortcut) ->
-                                          Sub = #rabbithub_subscription{resource = Resource,
+                                        Sub = #rabbithub_subscription{resource = Resource,
                                                                         topic = Topic,
                                                                         callback = Callback},
-                                        %%  ok = rabbithub_subscription:delete(Sub),
-                                        %%  ok;
                                         case rabbithub_subscription:deactivate(Sub) of
                                               ok -> 
                                                 case application:get_env(rabbithub, ha_consumers) of
-                                                    {ok, Mode} ->
+                                                    {ok, _Mode} ->
                                                         %Nodes = get_nodes(Mode),
                                                         RPCRes = deactivate_ha_consumers(Sub),
                                                         Body = [{node(), ok}] ++ RPCRes,
@@ -1189,7 +1241,6 @@ perform_request('POST', subscribe, unsubscribe, _ResourceTypeAtom, Resource, Par
 perform_request('DELETE', subscribe, _HubMode, _ResourceTypeAtom, Resource, ParsedQuery, Req) ->
     Callback = param(ParsedQuery, "hub.callback", missing),
     Topic = param(ParsedQuery, "hub.topic", missing),
-
     case lists:member(missing, [Callback, Topic]) of
         true ->
             Req:respond({400, [], "Missing required parameter"});
@@ -1197,37 +1248,22 @@ perform_request('DELETE', subscribe, _HubMode, _ResourceTypeAtom, Resource, Pars
             Sub = #rabbithub_subscription{resource = Resource,
                                             topic = Topic,
                                             callback = Callback},
-            case rabbithub_subscription:delete(Sub) of
-                ok ->  
-                    case application:get_env(rabbithub, ha_consumers) of                    
-                        {ok, Mode} ->
+            {atomic, Lease} = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Sub}) end),
+            case Lease of
+                [] ->  Req:respond({400, [], "Subscription not found please validate parameters"});
+                [L1] ->
+                    case L1#rabbithub_lease.ha_mode of
+                        [] -> delete_subscription(Req, Sub, none);
+                        undefined -> delete_subscription(Req, Sub, none);
+                        none -> delete_subscription(Req, Sub, none);
+                        _HAMode -> 
                             RPCRes = deactivate_ha_consumers(Sub),
-                            Body = [{node(), ok}] ++ RPCRes,
-                            ResponseBody = convert_response_body_to_json(Body),
-                            Req:respond({200, [{"Content-Type", "application/json"}], ResponseBody }),
-                            {ok, ResponseBody};
-                        _ ->
-                            Body2 = [{node(), ok}],
-                            ResponseBody2 = convert_response_body_to_json(Body2),
-                            Req:respond({200, [{"Content-Type", "application/json"}], ResponseBody2 }),
-                            {ok, ResponseBody2}
-                    end;
-                {error, not_found} -> 
-                    Body3 = [{node(), not_found}],
-                    ResponseBody3 = convert_response_body_to_json(Body3),
-                    Req:respond({404, [{"Content-Type", "application/json"}], ResponseBody3 }),
-                    {error, {status, 404}};
-                {error, Reason} ->  
-                    ReasonString = lists:flatten(io_lib:format("~p", [{error, Reason}])),
-                    ReasonString2 = re:replace(re:replace(ReasonString, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),
-                    ResponseBody4 = [{node(), list_to_binary(ReasonString2)}],
-                    Req:respond({500, [{"Content-Type", "application/json"}], ResponseBody4 }),
-                    rabbit_log:warning("RabbitHub 500 Error during Delete of ~p~n Error: ~p~n", [Sub, Reason]), 
-                    {error, {status, 500}} 
+                            delete_subscription(Req, Sub, RPCRes)
+                    end       
             end
-    end;    
-%%                                  
-                            
+    end;                                      
+
+                        
 
 perform_request(Method, Facet, HubMode, _ResourceType, Resource, ParsedQuery, Req) ->
     Xml = {debug_request_echo, [{method, [atom_to_list(Method)]},
@@ -1237,9 +1273,35 @@ perform_request(Method, Facet, HubMode, _ResourceType, Resource, ParsedQuery, Re
                                 {querystr, [io_lib:format("~p", [ParsedQuery])]}]},
     rabbit_log:info("RabbitHub performing request ~p~n", [Xml]),
     rabbithub:respond_xml(Req, 200, [], none, Xml).
+%% end of perform_request functions    
+    
+delete_subscription(Req, Sub, RPCRes) ->
+    case rabbithub_subscription:delete(Sub) of
+        ok ->
+            Body = case RPCRes of
+                none -> [{node(), ok}];
+                Results -> RPCRes
+            end,
+            ResponseBody = convert_response_body_to_json(Body),
+            Req:respond({200, [{"Content-Type", "application/json"}], ResponseBody }),
+            {ok, ResponseBody};
+        {error, not_found} -> 
+            Body3 = [{node(), not_found}],
+            ResponseBody3 = convert_response_body_to_json(Body3),
+            Req:respond({404, [{"Content-Type", "application/json"}], ResponseBody3 }),
+            {error, {status, 404}};
+        {error, Reason} ->  
+            ReasonString = lists:flatten(io_lib:format("~p", [{error, Reason}])),
+            ReasonString2 = re:replace(re:replace(ReasonString, "\n", "", [global,{return,list}]), "\s{2,}", " ", 
+                                [global,{return,list}]),
+            ResponseBody4 = [{node(), list_to_binary(ReasonString2)}],
+            Req:respond({500, [{"Content-Type", "application/json"}], ResponseBody4 }),
+            rabbit_log:warning("RabbitHub 500 Error during Delete of ~p~n Error: ~p~n", [Sub, Reason]), 
+            {error, {status, 500}}
+    end.                                
 
-create_ha_consumers(Nodes, Subscription, LeaseSeconds, HAMode, Status) ->
-        {Results, BadNodes} = rpc:multicall(Nodes, rabbithub_subscription, create, [Subscription, LeaseSeconds, HAMode, Status]),
+create_ha_consumers(Nodes, Subscription, LeaseSeconds, HAMode, MaxTps, Status) ->        
+        {Results, BadNodes} = rpc:multicall(Nodes, rabbithub_subscription, create, [Subscription, LeaseSeconds, HAMode, MaxTps, Status]),
         %% create list of [{node1, result1}, {node2, result2},...]
         FullResults = lists:append(
             lists:zip(Nodes -- BadNodes, Results),
@@ -1249,17 +1311,6 @@ create_ha_consumers(Nodes, Subscription, LeaseSeconds, HAMode, Status) ->
         RPCResults = [{N, Res} || N <- Nodes, {M, Res} <- FullResults, N == M],
         RPCResults.
         
-%remove after testing is no longer used        
-delete_ha_consumers(Nodes, Subscription) ->
-        {Results, BadNodes} = rpc:multicall(Nodes, rabbithub_subscription, delete_local_consumer, [Subscription]),
-        %% create list of [{node1, result1}, {node2, result2},...]
-        FullResults = lists:append(
-            lists:zip(Nodes -- BadNodes, Results),
-            [{BN, {badrpc, nodedown}} || BN <- BadNodes]
-        ),
-        %% restore original order
-        RPCResults = [{N, Res} || N <- Nodes, {M, Res} <- FullResults, N == M],
-        RPCResults.
 
 deactivate_ha_consumers(Subscription) ->
         ExistingConsumers = find_existing_consumers(Subscription),
@@ -1334,8 +1385,8 @@ convert_response_body_to_json(Body) ->
     
 convert_status(Value) ->
     case Value of
-        ValueAtom when is_atom(Value) -> Value;
-        ValueBinary when is_binary(Value) -> Value;
+        _ValueAtom when is_atom(Value) -> Value;
+        _ValueBinary when is_binary(Value) -> Value;
         Other when is_tuple(Value) ->
             ValueString1 = lists:flatten(io_lib:format("~p", [Other])),
             ValueString2 = re:replace(re:replace(ValueString1, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),

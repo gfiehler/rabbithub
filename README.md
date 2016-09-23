@@ -102,6 +102,68 @@ Javascript using the same tools.
   [RabbitMQ]: http://www.rabbitmq.com/
   [rabbitmq-xmpp]: http://hg.rabbitmq.com/rabbitmq-xmpp/raw-file/default/doc/overview-summary.html
 
+
+## RabbitHub API
+### API  
+| GET  | PUT  | DELETE  | POST | Path | Description |
+| :---: |:---:| :---:| :---:| :------| :------|
+|  | X  | X  | X | /endpoint/q/*queue_name* <br> /*vhost*/endpoint/q/*queue_name* | Create/Delete a Rabbitmq Queue|
+|  | X  | X  | X | /endpoint/x/*exchange_name* <br> /*vhost*/endpoint/x/*exchange_name* | Create/Delete a Rabbitmq Exchange.<br> Publish Message to Exchange (Query Parameter:  hub.topic=topic_name,<br> Payload:  Message Body.  <br> See Table Below for all publishing options|
+|  |   |  | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Subscribe to a Queue. <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync&hub.lease_seconds=86400".<br>See Table below for Options.   |
+|  |   |  | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Subscribe to an Exchange.  <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=async&hub.lease_seconds=86400".<br>See Table below for Options.  |
+|  |   |  | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Unsubscribe to a Queue. <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync".<br>See Table below for Options.   |
+|  |   |  | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Unsubscribe to an Exchange.  <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync&hub.verify=async&hub.lease_seconds=86400".<br>See Table below for Options.  |
+
+### Subscription Options
+| Parameter  | Description  |
+| :--- |:---| 
+| hub.callback | The URL to which RabbitHub should post each message to as it arrives |
+| hub.topic | A filter for selecting a subset of messages |
+| hub.verify  | The subscription verification mode for this request (the value may be either “sync” or “async”). Refer to the PubSubHubBub specification for additional details. |
+| hub.lease | Subscriber-provided lease duration in seconds. After this time, the subscription will be terminated. The default lease is approximately 30 days, and the maximum lease is approximately 1000 years. Refer to the PubSubHubBub specification for additional information.  |
+| hub.persistmsg | true:  set Rabbitmq to persist this message, should be in conjunction with durable queues. |
+| hub.maxtps | Simple throttling mechanism to limit the Maximum Transactions Per Second that can be sent to a subscriber.  See Max TPS section for details |
+
+### Other Publishing Options
+#### Headers Exchange Support
+It is now possible to publish message headers for use with Headers exchanges. 
+This is done with a custom HTTP header 'x-rabbithub-msg_header' sent with the publishing of a message to RabbitHub.
+The format of the values is a comma delimited list of key=value pairs.  Each key/value pair will be converted to
+a rabbitmq message properties used by headers exchanges for routing messages to queues.
+
+'''
+  x-rabbithub-msg_header:keya = valueA,keyb = valueB
+'''
+
+#### Correlation ID
+If the following environment variable is set, and the configured http header is set when publishing a message, the correlation id will be logged in the Rabbitmq log and sent to the subscriber with the same http header.
+
+Environment Variable:  `set_correlation_id = 'http header'` 
+   ..* HTTP Header:  the name of an http header that will have a value of a correlation id.  E.g. 'x-correlation-id'
+   If this header exists when a message is published to RabbitHub, the value will be passed on to all subscribers using the same http header on the Post to the subscriber.
+
+#### Message ID
+If the following enviroment variable is set, RabbitHub will generate a message id, log it in the Rabbitmq log and pass it to the subscriber in the configured http header.
+
+Environment Variable:  `set_message_id = 'http header'` 
+   ..* HTTP Header:  the name of an http header to send a message id to the subscriber.  E.g. 'x-message-id'
+   If this variable is set, when a message is published to RabbitHub, a message id will be generated and logged with the publication and then the message id will be sent to all subscribers as the value to this http header.
+ 
+#### Max TPS
+A simple method to throttle messages being sent to subscribers.  Rabbithub follows the following simple algorithm to determine how long to wait before processing the next message for a particular subscriber.
+
+   `Max Delay(milliseconds) = (1/(Max TPS/Number of Consumers))*1000
+   
+    Delay (milliseconds) = Max Delay - HTTP Post Transaction Time (milliseconds)`
+	
+	For example if you have environment variable ha_consumers=all and subscriber with maxtps=5 on a 3 node cluster 
+	and the HTTP POST takes 20 milliseconds :
+	
+	Delay = (1/(5/3))*1000 - 200
+	Delay = 400 milliseconds
+	
+	Note:  setting environment variable log_maxtps_delay = true will log this value on each POST.
+ 
 ## Proxy server support
 
 If RabbitHub is being used behind a firewall, it may be necessary to route HTTP(s) requests to callback URLs via a proxy server. A proxy server can be specified for RabbitHub by defining `http_client_options` in `rabbitmq.config` as illustrated below, where the same proxy server has been specified for both HTTP and HTTPS, and the proxy server will not be used for requests to `localhost`.
@@ -189,14 +251,31 @@ By setting the `ha_consumers` environment variable to one of the following modes
    If this variable is set, when a message is published to RabbitHub, a message id will be generated and logged with the publication and then the message id will be sent to all subscribers as the value to this http header.
    
 ## RabbitHub Subscriber Management
+### Subscriber Verification on Unsubscribe  
   By default the subscriber callback URL must be active and available to validate subscribe and unsubscribe requests.  The following environment variable allows for unsubscribing (deactivating) a subscriber without the validation to the callback URL.  This can be useful if a subscriber is down and it is desired to keep the subscription record in an inactive state until it is back up and available.
   
   Environment Variable:  `validate_callback_on_unsubscribe = true/false` 
    ..* true (default):  default behavior requires the callback URL to validate all unsubscribe/deactivate requests
    ..* false:  when a unsubscribe request is made, do not validate with the callback URL, shutdown any active consumers and change status to inactive.
 
+### HTTP Request Options
+  Options that are used when sending a HTTP POST request to the subscriber. E.g. timeout and connect_timeout.  Please see the HTTP Option section of <http://erlang.org/doc/man/httpc.html#request-5>.
   
-## RabbitHub APIs
+  `[
+        {rabbithub, [            
+			{http_request_options, [
+				{timeout, 2000}
+			]}
+	   ]}
+    ].`
+	
+### RabbitHub Subscriber Validation
+By default, any action to the subscriber must be validated.  This is done by making a GET request to the subscriber with a token value and the subscriber must respond with the token. Validation is done on `subscribe` and `unsubscribe` commands.   Subscribe is always required, however, unsubscribe validation can be turned off with the following environment variable.  This can be useful if a subscriber has stopped without unsubscribing and large numbers of messages are being backed up.
+
+* `validate_callback_on_unsubscribe` = (true, false)
+ ..* true:  default value.  Requires validation by calling subscriber to unsubscribe.
+ ..* false: does not require validation to unsubscribe.  
+   
 
 ### VHOST Support
 
@@ -205,15 +284,20 @@ For exmaple:
 
 - http://localhost:15670/testvhost/endpoint/x/xFoo
 
-### Headers Exchange Support
-It is now possible to publish message headers for use with Headers exchanges. 
-This is done with a custom HTTP header 'x-rabbithub-msg_header' sent with the publishing of a message to RabbitHub.
-The format of the values is a comma delimited list of key=value pairs.  Each key/value pair will be converted to
-a rabbitmq message properties used by headers exchanges for routing messages to queues.
+### Subscribing to an Exchange
+Technically it is not possbile to subscribe to an exchange.  To allow this, RabbitHub generates a queue with a name of 
+     `amq.http.pseudoqueue-<guid>`
+RabbitHub then binds that queue to the exchange with the hub.topic parameter as the routing key and creates a Rabbitmq 
+consumer for that queue.  
 
-'''
-  x-rabbithub-msg_header:keya = valueA,keyb = valueB
-'''
+However, this was done with an internal queue which means the consumer tag is not associated with the queue and it is harder to trace which queue is connected to which subscriber.  Also, some of the newer error management features are also not available e.g. 	unsubscribe_on_http_post_error.
+
+If the following environment variable is set, RabbitHub will still generate the queue, however, after binding it to the exchange, it will create a standard consumer that allows all features to work.  It will also show the consumer tag on the queue details page and show the pseudo_queue name on the subscriber details page of the RabbitHub Manangement Plugin.
+
+* `use_internal_queue_for_pseudo_queue` = (true, false)
+ ..* true:  default.  Backwards compatible by using internal queues.
+ ..* false: will create a standard consumer and link the queue to the consumer and subscriber. 
+
 
 ### Export List of Subscribers
 The following api will return a json formatted list of the current subscribers for RabbitHub.
@@ -243,7 +327,8 @@ The following api will return a json formatted list of the current subscribers f
 		"lease_expiry_time_microsec": 1472911582355564,
 		"lease_seconds": 1000000,
 		"ha_mode": "all",
-		"status": "inactive"
+		"status": "inactive",
+		"pseudo_queue": "[undefined]"
 	}, {
 		"vhost": "/",
 		"resource_type": "queue",
@@ -253,7 +338,8 @@ The following api will return a json formatted list of the current subscribers f
 		"lease_expiry_time_microsec": 1472911582355564,
 		"lease_seconds": 1000000,
 		"ha_mode": "all",
-		"status": "active"
+		"status": "active",
+		"pseudo_queue": "[undefined]"
 	}]
 ```
 ### Import Subscribers in Batch
@@ -289,7 +375,59 @@ These are set in the rabbitmq.config file as illustrated below
  ..* Time interval where unsubscribe_on_http_post_error_limit errors are allowed to happen prior to unsubscribing the consumer
  
 NOTE: 'unsubscribe_on_http_post_error_limit' and `unsubscribe_on_http_post_error_timeout_microseconds` must be set as a pair as it designates that
- `unsubscribe_on_http_post_error_limit` may occur within `unsubscribe_on_http_post_error_timeout_microseconds` time interval before the consumer is unsubscribed.
+ `unsubscribe_on_http_post_error_limit` may occur within `unsubscribe_on_http_post_error_timeout_microseconds` time interval before the consumer is unsubscribed.  Also if these are set unsubscribe_on_http_post_error will not be used as the above overrides it.
+
+
+The following table helps explain how the above options work together.
+
+| requeue_on_http_post_error                | unsubscribe_on_http_post _error | unsubscribe_on_http_post_error_limit | unsubscribe_on_http_post_error_timeout_microseconds | requires DLQ | Behavior |                                                                                                                 | 
+|-------------------------------------------|---------------------------------|--------------------------------------|-----------------------------------------------------|--------------|----------|-----------------------------------------------------------------------------------------------------------------| 
+|                                           | TRUE                            | TRUE                                 | Unset                                               | Unset        | NO       | "HTTP Response Error:  Consumer:  Unsubscribed                                                                  | 
+| Message in Queue: Ready"                  |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           |                                 |                                      |                                                     |              |          | "Other Error:  Consumer:  Unsubscribed                                                                          | 
+| Message in Queue:  Ready"                 |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           | TRUE                            | FALSE                                | Unset                                               | Unset        | NO       | "HTTP Response Error:  Consumer:  Subscribed                                                                    | 
+| Message in Queue:  Unacked"               |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           |                                 |                                      |                                                     |              |          | "Other Error:  Consumer:  Subscribed                                                                            | 
+| Message in Queue:  Unacked"               |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           | TRUE                            | TRUE                                 | Set                                                 | Set          | YES      | "HTTP Response Error:  Consumer:  Unsubscribed (only 1 message is published, they retry 5 more times and unsub) | 
+| Message in Queue: Ready"                  |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           |                                 |                                      |                                                     |              |          | "Other Error:  Consumer:  Unsubscribed                                                                          | 
+| Message in Queue:  Ready"                 |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           | TRUE                            | FALSE                                | Set                                                 | Set          | YES      | NOT ALLOWED                                                                                                     | 
+|                                           |                                 |                                      |                                                     |              |          | NOT ALLOWED                                                                                                     | 
+|                                           | FALSE                           | TRUE                                 | Unset                                               | Unset        | YES      | "HTTP Response Error:  Consumer: Unsubscribed                                                                   | 
+| Message in Queue:  DLQ or Lost"           |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           |                                 |                                      |                                                     |              |          | "Other Error:  Consumer:  Unsubscribed                                                                          | 
+| Message in Queue:  Ready"                 |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           | FALSE                           | FALSE                                | Unset                                               | Unset        | YES      | "HTTP Response Error:  Consumer:  Subscribed                                                                    | 
+| Message in Queue:  DLQ or Lost"           |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           |                                 |                                      |                                                     |              |          | "Other Error:  Consumer:  Subscribed                                                                            | 
+| Message in Queue:  Unacked"               |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           | FALSE                           | TRUE                                 | Set                                                 | Set          | YES      | "HTTP Response Error:  Consumer:  Unsubscribed (6 msgs published before Unsub)                                  | 
+| Message in Queue:  6 msgs in DLQ or Lost" |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           |                                 |                                      |                                                     |              |          | "Other Error:    Consumer:  Unsubscribed (6 msgs publsihed before unusb)                                        | 
+|  Message in Queue:  6 msgs DLQ or Lost"   |                                 |                                      |                                                     |              |          |                                                                                                                 | 
+|                                           | FALSE                           | "False                               |                                                     |              |          |                                                                                                                 | 
+| NOT ALLOWED"                              | Set                             | Set                                  | YES                                                 | NOT ALLOWED  |          |                                                                                                                 | 
+|                                           |                                 |                                      |                                                     |              |          | NOT ALLOWED                                                                                                     | 
+
+Explanation of Behavior column
+
+| Tests              | Scenario/Coumn D and E                                           | Description                                                    | Attributes                                                                                                                                                             |  | Terms                          | Explanation                                                                             | 
+|--------------------|------------------------------------------------------------------|----------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--|--------------------------------|-----------------------------------------------------------------------------------------| 
+| 1                  | HTTP Error Test/Unset                                            | publish 1 message, subscriber returns http response code:  400 |                                                                                                                                                                        |  | HTTP Resonse Error             | HTTP response codes in 400 or 500 series                                                | 
+| 2                  | Other Error/Unset                                                | publish 1 message, subscriber is down, connection error        |                                                                                                                                                                        |  | Other Errors                   | Connection error or timeout errors                                                      | 
+| 3                  | HTTP Error Test/Set                                              | publish 6 message, subscriber returns http response code:  400 | "Column D=5                                                                                                                                                            |  |                                |                                                                                         | 
+| Column E=60000000" |                                                                  | Measage in Queue:  Ready                                       | msg can be processed by another consumer                                                                                                                               |  |                                |                                                                                         | 
+| 4                  | Other Error/Set                                                  | publish 6 message, subscriber is down, connection error        | "Column D=5                                                                                                                                                            |  |                                |                                                                                         | 
+| Column E=60000000" |                                                                  | Message in Queue:  Unacked                                     | msg cannot be processed by another consumer, consumer is hung and no other messages can be processed.  Have to manually unsubscribe or deactivate user to process msg. |  |                                |                                                                                         | 
+|                    |                                                                  |                                                                |                                                                                                                                                                        |  | Message in Queue:  DLQ or Lost | msg is either lost or sent to Dead Letter Queue if a Dead Letter Exchange is configured | 
+|                    |                                                                  |                                                                |                                                                                                                                                                        |  | Consumer:  Unsubscribed        | Consumer was deactivated, can be Activated via UI or API                                | 
+| Note:              | after unsub all subsequent messages left in queue in ready state |                                                                |                                                                                                                                                                        |  |                                |                                                                                         | 
+
+
+
  
 ```
 [
@@ -353,7 +491,7 @@ To help understand how many errors have occured the following rest endpoint retu
 ## RabbitHub Management UI
 A Rabbitmq_management plugin has been created for RabbitHub.  Please refer to 
 
-		https://github.com/gfiehler/rabbithub_management
+		<https://github.com/gfiehler/rabbithub_management>
  
 ## Software License
 
