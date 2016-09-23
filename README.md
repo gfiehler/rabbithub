@@ -109,10 +109,10 @@ Javascript using the same tools.
 | :---: |:---:| :---:| :---:| :------| :------|
 |  | X  | X  | X | /endpoint/q/*queue_name* <br> /*vhost*/endpoint/q/*queue_name* | Create/Delete a Rabbitmq Queue|
 |  | X  | X  | X | /endpoint/x/*exchange_name* <br> /*vhost*/endpoint/x/*exchange_name* | Create/Delete a Rabbitmq Exchange.<br> Publish Message to Exchange (Query Parameter:  hub.topic=topic_name,<br> Payload:  Message Body.  <br> See Table Below for all publishing options|
-|  |   |  | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Subscribe to a Queue. <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync&hub.lease_seconds=86400".<br>See Table below for Options.   |
-|  |   |  | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Subscribe to an Exchange.  <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=async&hub.lease_seconds=86400".<br>See Table below for Options.  |
-|  |   |  | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Unsubscribe to a Queue. <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync".<br>See Table below for Options.   |
-|  |   |  | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Unsubscribe to an Exchange.  <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync&hub.verify=async&hub.lease_seconds=86400".<br>See Table below for Options.  |
+|  |   | X | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Subscribe to a Queue. <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync&hub.lease_seconds=86400".<br>See Table below for Options.   |
+|  |   | X | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Subscribe to an Exchange.  <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=async&hub.lease_seconds=86400".<br>See Table below for Options.  |
+|  |   | X | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Unsubscribe to a Queue. <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync".<br>See Table below for Options.   |
+|  |   | X | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Unsubscribe to an Exchange.  <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync&hub.verify=async&hub.lease_seconds=86400".<br>See Table below for Options.  |
 
 ### Subscription Options
 | Parameter  | Description  |
