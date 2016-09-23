@@ -386,15 +386,15 @@ The following table helps explain how the above options work together.
 |       |      |      | | |Other Error:  Consumer:  Unsubscribed<br> Message in Queue:  Ready |
 | TRUE  | FALSE | Unset | Unset | NO | "HTTP Response Error:  Consumer: Subscribed<br> Message in Queue:  Unacked |
 | | | | | | Other Error:  Consumer:  Subscribed <br> Message in Queue:  Unacked |
-| TRUE | TRUE | Set | Set | YES  | HTTP Response Error:  Consumer:  Unsubscribed (only 1 message is published, they retry 5 more times and unsub)<br>Message in Queue: Ready |
+| TRUE | TRUE | Set | Set | YES  | HTTP Response Error:  Consumer:  Unsubscribed <br>(only 1 message is published,<br> they retry 5 more times and unsub)<br><br>Message in Queue: Ready |
 | | | | | | Other Error:  Consumer:  Unsubscribed <br>Message in Queue:  Ready |
 | TRUE  | FALSE | Set | Set | YES | NOT ALLOWED <br> NOT ALLOWED |                                                                                                     | 
 | FALSE | TRUE | Unset | Unset | YES | HTTP Response Error:  Consumer: Unsubscribed<br>Message in Queue:  DLQ or Lost|
 | | | | | | Other Error:  Consumer:  Unsubscribed<br>Message in Queue:  Ready |
 | FALSE | FALSE | Unset | Unset | YES | HTTP Response Error:  Consumer:  Subscribed<br>Message in Queue:  DLQ or Lost |
 | | | | | | Other Error:  Consumer:  Subscribed<br>Message in Queue:  Unacked |
-| FALSE | TRUE | Set | Set | YES | HTTP Response Error:  Consumer:  Unsubscribed (6 msgs published before Unsub)<br>Message in Queue:  6 msgs in DLQ or Lost | 
-| | | | | | Other Error:    Consumer:  Unsubscribed (6 msgs publsihed before unusb)<br>Message in Queue:  6 msgs DLQ or Lost  |
+| FALSE | TRUE | Set | Set | YES | HTTP Response Error:  Consumer:  Unsubscribed<br> (6 msgs published before Unsub)<br><br>Message in Queue:  6 msgs in DLQ or Lost | 
+| | | | | | Other Error: Consumer: Unsubscribed <br>(6 msgs publsihed before unusb)<br><br>Message in Queue:  6 msgs DLQ or Lost  |
 | FALSE | False<br> NOT ALLOWED |  Set | Set | YES | NOT ALLOWED<br>NOT ALLOWED | 
 
 
@@ -403,8 +403,8 @@ The following table helps explain how the above options work together.
 | HTTP Resonse Error | HTTP response codes in 400 or 500 series |
 | Other Errors | Connection error or timeout error |
 | Message in Queue: ready | Msg can be processed by another consumer |
-| Message in Queue: Unacked | msg cannot be processed by another consumer, consumer is hung and no other messages can be processed.  Have to manually unsubscribe or deactivate user to process msg |
-| Message in Queue:  DLQ or Lost | msg is either lost or sent to Dead Letter Queue if a Dead Letter Exchange is configured |
+| Message in Queue: Unacked | msg cannot be processed by another consumer,<br> consumer is hung and no other messages can be processed.  Have to manually unsubscribe or deactivate user to process msg |
+| Message in Queue:  DLQ or Lost | msg is either lost or sent to Dead Letter Queue<br> if a Dead Letter Exchange is configured |
 | Consumer:  Unsubscribed | Consumer was deactivated, can be Activated via UI or API |
 
 ### Sample Configuration
