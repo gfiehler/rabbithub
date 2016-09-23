@@ -114,6 +114,16 @@ Javascript using the same tools.
 |  |   | X | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Unsubscribe to a Queue. <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync".<br>See Table below for Options.   |
 |  |   | X | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Unsubscribe to an Exchange.  <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync&hub.verify=async&hub.lease_seconds=86400".<br>See Table below for Options.  |
 
+#### Uniqueness of Subscriber
+A Unique Subscriber is defined by 
+ * vhost
+ * resource type (queue/exchange)
+ * resource name
+ * callback url
+ * topic
+ 
+ NOTE:  *It is possible to create multiple subscribers to the same queue, depending on the queue type.  If this occurs, the subscribers share the queue and each message will only go to one subscriber.*
+
 ### Subscription Options
 | Parameter  | Description  |
 | :--- |:---| 
