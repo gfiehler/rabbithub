@@ -389,10 +389,10 @@ The following table helps explain how the above options work together.
 | TRUE | TRUE | Set | Set | YES  | HTTP Response Error:  Consumer:  Unsubscribed <br>(only 1 message is published,<br> they retry 5 more times and unsub)<br><br><br>Message in Queue: Ready |
 | | | | | | Other Error:  Consumer:  Unsubscribed <br><br><br>Message in Queue:  Ready |
 | TRUE  | FALSE | Set | Set | YES | NOT ALLOWED <br><br><br> NOT ALLOWED |                                                                                                     | 
-| FALSE | TRUE | Unset | Unset | YES | HTTP Response Error:  Consumer: Unsubscribed<br<br>><br>Message in Queue:  DLQ or Lost|
+| FALSE | TRUE | Unset | Unset | YES | HTTP Response Error:  Consumer: Unsubscribed<br><br><br>Message in Queue:  DLQ or Lost|
 | | | | | | Other Error:  Consumer:  Unsubscribed<br><br><br>Message in Queue:  Ready |
 | FALSE | FALSE | Unset | Unset | YES | HTTP Response Error:  Consumer:  Subscribed<br><br><br>Message in Queue:  DLQ or Lost |
-| | | | | | Other Error:  Consumer:  Subscribed<br>Message in Queue:  Unacked |
+| | | | | | Other Error:  Consumer:  Subscribed<br><br>Message in Queue:  Unacked |
 | FALSE | TRUE | Set | Set | YES | HTTP Response Error:  Consumer:  Unsubscribed<br> (6 msgs published before Unsub)<br><br><br>Message in Queue:  6 msgs in DLQ or Lost | 
 | | | | | | Other Error: Consumer: Unsubscribed <br>(6 msgs publsihed before unusb)<br><br><br>Message in Queue:<br>  6 msgs DLQ or Lost  |
 | FALSE | False<br> NOT ALLOWED |  Set | Set | YES | NOT ALLOWED<br><br><br>NOT ALLOWED | 
