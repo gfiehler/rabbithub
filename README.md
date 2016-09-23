@@ -380,21 +380,21 @@ NOTE: 'unsubscribe_on_http_post_error_limit' and `unsubscribe_on_http_post_error
 
 The following table helps explain how the above options work together.
 
-| requeue_on_http _post_error | unsubscribe_on_ http_post _error | unsubscribe_on_ http_post_ error_limit | unsubscribe_on_ http_post_ error_timeout_ microseconds | requires DLQ | Behavior | 
+| requeue_on_ http_post_ error | unsubscribe_on_ http_post _error | unsubscribe_on_ http_post_ error_limit | unsubscribe_on_ http_post_ error_timeout_ microseconds | requires DLQ | Behavior | 
 |-------------|-----|----------|--------|--------|---------| 
-| TRUE  | TRUE | Unset| Unset | NO | HTTP Response Error:  Consumer: unsubscribed <br>Message in Queue: Ready|
-|       |      |      | | |Other Error:  Consumer:  Unsubscribed<br> Message in Queue:  Ready |
-| TRUE  | FALSE | Unset | Unset | NO | "HTTP Response Error:  Consumer: Subscribed<br> Message in Queue:  Unacked |
-| | | | | | Other Error:  Consumer:  Subscribed <br> Message in Queue:  Unacked |
-| TRUE | TRUE | Set | Set | YES  | HTTP Response Error:  Consumer:  Unsubscribed <br>(only 1 message is published,<br> they retry 5 more times and unsub)<br><br>Message in Queue: Ready |
-| | | | | | Other Error:  Consumer:  Unsubscribed <br>Message in Queue:  Ready |
-| TRUE  | FALSE | Set | Set | YES | NOT ALLOWED <br> NOT ALLOWED |                                                                                                     | 
-| FALSE | TRUE | Unset | Unset | YES | HTTP Response Error:  Consumer: Unsubscribed<br>Message in Queue:  DLQ or Lost|
+| TRUE  | TRUE | Unset| Unset | NO | HTTP Response Error:  Consumer: unsubscribed <br><br>Message in Queue: Ready|
+|       |      |      | | |Other Error:  Consumer:  Unsubscribed<br><br> Message in Queue:  Ready |
+| TRUE  | FALSE | Unset | Unset | NO | "HTTP Response Error:  Consumer: Subscribed<br><br> Message in Queue:  Unacked |
+| | | | | | Other Error:  Consumer:  Subscribed <br><br> Message in Queue:  Unacked |
+| TRUE | TRUE | Set | Set | YES  | HTTP Response Error:  Consumer:  Unsubscribed <br>(only 1 message is published,<br> they retry 5 more times and unsub)<br><br><br>Message in Queue: Ready |
+| | | | | | Other Error:  Consumer:  Unsubscribed <br><br>Message in Queue:  Ready |
+| TRUE  | FALSE | Set | Set | YES | NOT ALLOWED <br><br> NOT ALLOWED |                                                                                                     | 
+| FALSE | TRUE | Unset | Unset | YES | HTTP Response Error:  Consumer: Unsubscribed<br><br>Message in Queue:  DLQ or Lost|
 | | | | | | Other Error:  Consumer:  Unsubscribed<br>Message in Queue:  Ready |
-| FALSE | FALSE | Unset | Unset | YES | HTTP Response Error:  Consumer:  Subscribed<br>Message in Queue:  DLQ or Lost |
+| FALSE | FALSE | Unset | Unset | YES | HTTP Response Error:  Consumer:  Subscribed<br><br>Message in Queue:  DLQ or Lost |
 | | | | | | Other Error:  Consumer:  Subscribed<br>Message in Queue:  Unacked |
-| FALSE | TRUE | Set | Set | YES | HTTP Response Error:  Consumer:  Unsubscribed<br> (6 msgs published before Unsub)<br><br>Message in Queue:  6 msgs in DLQ or Lost | 
-| | | | | | Other Error: Consumer: Unsubscribed <br>(6 msgs publsihed before unusb)<br><br>Message in Queue:  6 msgs DLQ or Lost  |
+| FALSE | TRUE | Set | Set | YES | HTTP Response Error:  Consumer:  Unsubscribed<br> (6 msgs published before Unsub)<br><br><br>Message in Queue:  6 msgs in DLQ or Lost | 
+| | | | | | Other Error: Consumer: Unsubscribed <br>(6 msgs publsihed before unusb)<br><br><br>Message in Queue:  6 msgs DLQ or Lost  |
 | FALSE | False<br> NOT ALLOWED |  Set | Set | YES | NOT ALLOWED<br>NOT ALLOWED | 
 
 
