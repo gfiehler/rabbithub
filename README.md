@@ -102,7 +102,7 @@ Javascript using the same tools.
   [RabbitMQ]: http://www.rabbitmq.com/
   [rabbitmq-xmpp]: http://hg.rabbitmq.com/rabbitmq-xmpp/raw-file/default/doc/overview-summary.html
 
-## RabbitHub Management
+## RabbitHub Management UI
 A Rabbitmq Management Plugin for RabbitHub can be found here 
 <https://github.com/gfiehler/rabbithub_management>
 
