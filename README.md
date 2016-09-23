@@ -380,8 +380,8 @@ NOTE: 'unsubscribe_on_http_post_error_limit' and `unsubscribe_on_http_post_error
 
 The following table helps explain how the above options work together.
 
-| requeue_on_http_post_error | unsubscribe_on_http_post _error | unsubscribe_on_http_post_error_limit | unsubscribe_on_http_post_error_timeout_microseconds | requires DLQ | Behavior | 
-|----------------------------|---------------------------------|--------------------------------------|-----------------------------------------------------|--------------|----------| 
+| requeue_on_http_post_error | unsubscribe_on_http_post _error | unsubscribe_on_http_post_error_limit | unsubscribe_on_http_post_error_timeout_microseconds | requires DLQ | Behavior                                                      | 
+|----------------------------|---------------------------------|--------------------------------------|-----------------------------------------------------|--------------|---------------------------------------------------------------| 
 | TRUE  | TRUE | Unset| Unset | NO | HTTP Response Error:  Consumer: unsubscribed <br>Message in Queue: Ready|
 |       |      |      | | |Other Error:  Consumer:  Unsubscribed<br> Message in Queue:  Ready |
 | TRUE  | FALSE | Unset | Unset | NO | "HTTP Response Error:  Consumer: Subscribed<br> Message in Queue:  Unacked |
