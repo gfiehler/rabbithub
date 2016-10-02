@@ -44,7 +44,8 @@ handle_req(Req) ->
     ParsedQuery = mochiweb_util:parse_qs(Query),
     %% When we get to drop support for R12B-3, we can start using
     %% re:split(Path, "/", [{parts, 4}]) again.
-
+    
+    %% rabbit_log:info("RabbitHub Request Path: ~p Query: ~p~n", [Path, Query]),
     %% case split_path(Path, 4) of
     %% BRC
     case split_path(Path, 5) of
@@ -496,7 +497,7 @@ extract_lease_seconds(ParsedQuery) ->
     end.
     
 extract_maxtps(ParsedQuery) ->
-    case catch list_to_integer(param(ParsedQuery, "hub.maxtps", 0)) of
+    case catch list_to_integer(param(ParsedQuery, "hub.max_tps", 0)) of
         {'EXIT', _Reason} -> 0;
         InvalidValue when InvalidValue =< 0 -> 0;
         Value -> Value
@@ -678,6 +679,7 @@ convert_leases_to_json(Leases) ->
                {lease_seconds, Lease#rabbithub_lease.lease_seconds},
                {ha_mode, Lease#rabbithub_lease.ha_mode},
                {status, Lease#rabbithub_lease.status},
+               {maxtps, Lease#rabbithub_lease.max_tps},
                {pseudo_queue, convert_amq_to_binary(Lease#rabbithub_lease.pseudo_queue)}]
 	    || Lease <- Leases]}]},
     Resp = mochijson2:encode(Data),
@@ -784,7 +786,7 @@ create_subscription(Callback, Topic, LeaseSeconds, Resource, Status, HA, MaxTps)
                                 callback = Callback},
     HAMode = case HA of
         undefined ->
-            case application:get_env(rabbithub, ha_consumers) of
+            case application:get_env(rabbithub, ha_mode) of
                 {ok, Mode} -> Mode;                                                                
                 undefined  -> none                                                                
             end;
@@ -1158,31 +1160,47 @@ perform_request('POST', subscribe, subscribe, _ResourceTypeAtom, Resource, Parse
                                     Sub = #rabbithub_subscription{resource = Resource,
                                                                     topic = Topic,
                                                                     callback = Callback},
-                                    HubHAConsumer = param(ParsedQuery, "hub.haconsumer", true),
-                                    HAMode = case HubHAConsumer of
-                                        true ->
-                                            case application:get_env(rabbithub, ha_consumers) of
+                                    HubHAMode = param(ParsedQuery, "hub.ha_mode", missing),
+                                    
+                                    HubHAMode1 = case HubHAMode of
+                                        missing -> missing;
+                                        _ ->
+                                            case string:to_integer(HubHAMode) of
+                                                {error, _} -> 
+                                                    case string:equal(HubHAMode, "all") of
+                                                        true -> all;
+                                                        false -> none
+                                                    end ;
+                                                {Int, _} -> Int;
+                                                _ -> none
+                                            end
+                                    end,                                    
+                                    HAMode = case HubHAMode1 of
+                                        missing ->
+                                            case application:get_env(rabbithub, ha_mode) of
                                                 {ok, Mode} -> Mode;                                                                
                                                 _ -> none                                                                
                                             end;
-                                         false -> none
+                                        none -> none;
+                                        Mode -> 
+                                            case Mode of
+                                                all -> all;
+                                                Number when is_integer(Number) -> Number;
+                                                _Other -> none
+                                            end
                                     end,                                                       
                                     MaxTps = extract_maxtps(ParsedQuery),     
                                     case rabbithub_subscription:create(Sub, LeaseSeconds, HAMode, MaxTps, active) of
-                                        ok ->                                             
-                                            case HubHAConsumer of
-                                                true ->
-                                                    case HAMode of
-                                                        none -> ok;
-                                                        _Mode1 ->
-                                                            Nodes = get_nodes(HAMode),
-                                                            RPCRes = create_ha_consumers(Nodes, Sub, LeaseSeconds, HAMode, MaxTps, active),
-                                                            Body = [{node(), ok}] ++ RPCRes,
-                                                            ResponseBody = convert_response_body_to_json(Body),
-                                                            {ok, ResponseBody}
-                                                    end;
-                                                 false -> ok
-                                            end;                
+                                        ok ->                                                                                
+                                            case HAMode of
+                                                none -> ok;
+                                                _Mode1 ->
+                                                    Nodes = get_nodes(HAMode),
+                                                    RPCRes = create_ha_consumers(Nodes, Sub, LeaseSeconds, HAMode, MaxTps, active),
+                                                    Body = [{node(), ok}] ++ RPCRes,
+                                                    ResponseBody = convert_response_body_to_json(Body),
+                                                    {ok, ResponseBody}
+                                            end;    
                                         {error, not_found} -> {error, {status, 404}, "queue or exchange not found"};
                                         {error, _} ->         {error, {status, 500}};
                                         Err ->                {error, {status, 400}, lists:flatten(io_lib:format("~p", [Err]))}
@@ -1210,7 +1228,7 @@ perform_request('POST', subscribe, unsubscribe, _ResourceTypeAtom, Resource, Par
                                                                         callback = Callback},
                                         case rabbithub_subscription:deactivate(Sub) of
                                               ok -> 
-                                                case application:get_env(rabbithub, ha_consumers) of
+                                                case application:get_env(rabbithub, ha_mode) of
                                                     {ok, _Mode} ->
                                                         %Nodes = get_nodes(Mode),
                                                         RPCRes = deactivate_ha_consumers(Sub),
@@ -1280,7 +1298,7 @@ delete_subscription(Req, Sub, RPCRes) ->
         ok ->
             Body = case RPCRes of
                 none -> [{node(), ok}];
-                Results -> RPCRes
+                _Results -> RPCRes
             end,
             ResponseBody = convert_response_body_to_json(Body),
             Req:respond({200, [{"Content-Type", "application/json"}], ResponseBody }),
