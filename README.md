@@ -137,7 +137,8 @@ A Unique Subscriber is defined by
 | hub.verify  | The subscription verification mode for this request (the value may be either “sync” or “async”). Refer to the PubSubHubBub specification for additional details. |
 | hub.lease | Subscriber-provided lease duration in seconds. After this time, the subscription will be terminated. The default lease is approximately 30 days, and the maximum lease is approximately 1000 years. Refer to the PubSubHubBub specification for additional information.  |
 | hub.persistmsg | true:  set Rabbitmq to persist this message, should be in conjunction with durable queues. |
-| hub.maxtps | Simple throttling mechanism to limit the Maximum Transactions Per Second that can be sent to a subscriber.  See Max TPS section for details |
+| hub.max_tps | Simple throttling mechanism to limit the Maximum Transactions Per Second that can be sent to a subscriber.  See Max TPS section for details |
+| hub.ha_mode | Ability to set HA Mode for a consumer for an individual subscription overriding the enviornment variable settings.  See High Availability Consumers section for details |
 
 ### Other Publishing Options
 #### Headers Exchange Support
@@ -171,7 +172,7 @@ A simple method to throttle messages being sent to subscribers.  Rabbithub follo
    
     Delay (milliseconds) = Max Delay - HTTP Post Transaction Time (milliseconds)`
 	
-	For example if you have environment variable ha_consumers=all and subscriber with maxtps=5 on a 3 node cluster 
+	For example if you have environment variable ha_consumers=all and subscriber with max_tps=5 on a 3 node cluster 
 	and the HTTP POST takes 20 milliseconds :
 	
 	Delay = (1/(5/3))*1000 - 200
@@ -313,6 +314,7 @@ If the following environment variable is set, RabbitHub will still generate the 
  ..* true:  default.  Backwards compatible by using internal queues.
  ..* false: will create a standard consumer and link the queue to the consumer and subscriber. 
 
+**NOTE:**  *If you create subscribers to an exchange and then change `use_internal_queue_for_pseudo_queue` value, it will most likely fail.  If you need to change which pseduo queue method is used, you must delete all current exchange subscribers and re-create them after the change.*
 
 ### Export List of Subscribers
 The following api will return a json formatted list of the current subscribers for RabbitHub.
