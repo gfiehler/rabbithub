@@ -487,7 +487,7 @@ To help understand how many errors have occured the following rest endpoint retu
 ## RabbitHub Management UI
 A Rabbitmq_management plugin has been created for RabbitHub.  Please refer to 
 
-		<https://github.com/gfiehler/rabbithub_management>
+		[RabbitHub Management UI](https://github.com/gfiehler/rabbithub_management)
  
 ## Software License
 
