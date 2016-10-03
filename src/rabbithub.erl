@@ -269,7 +269,7 @@ deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
                                 content = Content0 = #content{payload_fragments_rev = PayloadRev}},
                  ExtraHeaders) ->
                  
-    rabbit_log:info("GF RabbitHub Deliver:  Message Properties: ~p", [Content0#content.properties]),                 
+                 
     case catch mochiweb_util:urlsplit(Callback) of
         {_Scheme, _NetLoc, _Path, ExistingQuery, _Fragment} ->         
            #content{properties = #'P_basic'{content_type = ContentTypeBin}} =
