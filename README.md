@@ -127,7 +127,7 @@ A Unique Subscriber is defined by
  * callback url
  * topic
  
- NOTE:  *It is possible to create multiple subscribers to the same queue, depending on the queue type.  If this occurs, the subscribers share the queue and each message will only go to one subscriber.*
+ NOTE:  *It is possible to create multiple subscribers to the same queue, depending on the exchange type.  If this occurs, the subscribers share the queue and each message will only go to one subscriber. Since the hub.topic parameter does not affect the subscription to an existing queue (primarily utilized when subscribing to an exchange in binding the generated pseudo queue to the exchange) but is still considered part of the uniqueness of the subscriber, you can create 2 subscribers to the same queue with different topics.  In this case only one subscriber to this queue will get each message.*
 
 ### Subscription Options
 | Parameter  | Description  |
