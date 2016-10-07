@@ -369,6 +369,9 @@ The file that was exported in the previous section can then be imported with the
 ```
 Both export and import are also available via the RabbitHub Management UI.
 
+### Modifying an Existing Subscribers Configuration
+If you need to update the configuration, such as expiration or ha mode, and the subscriber is already running and active, you must first deactivate the subscriber, then activate it with the new configuration.  If you update the subscriber configuration while it is active, it will not affect the current running subscriber, but will take affect on the next consumer restart.  This can be done via the API, UI or via batch updates.
+
 ## RabbitHub hub.topic in posts to subscribers
   RabbitHub environment variable- append_hub_topic_to_callback: (true, false)
   ..* true: (default) Append hub.topic parameter when Posting a message to a subscriber
