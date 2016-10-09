@@ -251,7 +251,15 @@ By setting the `ha_consumers` environment variable to one of the following modes
   Environment Variable:  `log_http_post_request = true/false` 
    ..* true:  will log all posts to subscribers
    ..* false: (default) will not log posts to subscribers
-	 
+
+  Environment Variable:  `log_published_messages = true/false` 
+   ..* true:  will log all messages published to RabbitHUb with Message ID (if configured), Correlation ID (if present) and Configured Message Headers.  
+   ..* false: (default) will not log messages published to RabbitHub
+
+  Environment Variable:  `log_message_body = true/false` 
+   ..* true:  if `log_published_messages` is set to true, also log the message body with published messages
+   ..* false: (default) will not log message body for published messages
+
   To log other values that may be useful for troubleshooting or for archive records the following Environment Variables are available:
 
   Environment Variable:  `log_http_headers = [header1, header2]` 
