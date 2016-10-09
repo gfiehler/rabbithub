@@ -924,26 +924,20 @@ perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
             end;
         _ -> undefined
     end,         
-            
-    case MsgId of
-        undefined -> do_nothing;
-        MsgIdValue ->  rabbit_log:info("RabbitHub:  Message Published for Resource ~p~n with message id: ~p~n", [Resource, MsgIdValue])
-    end,
-    case CorrId of
-        undefined -> do_nothing;
-        CorrIdValue -> rabbit_log:info("RabbitHub:  Message Published for Resource ~p~n with correlation id: ~p~n", [Resource, CorrIdValue])
-    end,
-    case application:get_env(rabbithub, log_http_headers) of
-        {ok, HeaderList} ->
-            lists:foreach(fun(N) -> 
-                case Req:get_header_value(N) of        
-                    undefined -> do_nothing;
-                    HeaderValue ->  rabbit_log:info("RabbitHub:  Message Published for Resource ~p~n with HTTP Header: ~p = ~p~n", 
-                                        [Resource, N, HeaderValue])
-                end
-                end, HeaderList);
-        _ ->
-            do_nothing
+    case application:get_env(rabbithub, log_published_messages) of        
+        {ok, true} ->                        
+            HeaderList2 = case application:get_env(rabbithub, log_http_headers) of
+                {ok, HeaderList} ->
+                    build_header_string(Req, HeaderList);
+                _ ->
+                    undefined
+            end,
+            BodyStr = case application:get_env(rabbithub, log_message_body) of
+                {ok, true} -> Req:recv_body();
+                _ -> undefined                
+            end,
+            rabbit_log:info("RabbitHub:  Message Published for Resource ~p~n  Message Id: ~p~n  Correlation Id:  ~p~n  HTTP Headers: ~p~n  Msg Body:  ~p~n", [Resource, MsgId, CorrId, HeaderList2, BodyStr]);            
+        _ -> do_nothing
     end,
     case Req:get_header_value("x-rabbithub-msg_header") of
         %% no custom HTTP header for headers exchange, publish normal
@@ -985,25 +979,20 @@ perform_request('POST', endpoint, '', queue, Resource, ParsedQuery, Req) ->
             end;
         _ -> undefined
     end,            
-    case MsgId of
-        undefined -> do_nothing;
-        MsgIdValue -> rabbit_log:info("RabbitHub: Message Published for Resource ~p~n with message_id = ~p~n", [Resource, MsgIdValue])
-    end,
-    case CorrId of
-        undefined -> do_nothing;
-        CorrIdValue -> rabbit_log:info("RabbitHub: Message Published for Resource ~p~n with correlation_id = ~p~n", [Resource, CorrIdValue])
-    end,
-    case application:get_env(rabbithub, log_http_headers) of
-        {ok, HeaderList} ->
-            lists:foreach(fun(N) -> 
-                                case Req:get_header_value(N) of        
-                                    undefined -> do_nothing;
-                                    HeaderValue ->  rabbit_log:info("RabbitHub: Message Published for Resource ~p~n with HTTP Header ~p = ~p~n", 
-                                        [Resource, N, HeaderValue])
-                                end
-                            end, HeaderList);
-        _ ->
-            do_nothing
+    case application:get_env(rabbithub, log_published_messages) of        
+        {ok, true} ->                        
+            HeaderList2 = case application:get_env(rabbithub, log_http_headers) of
+                {ok, HeaderList} ->
+                    build_header_string(Req, HeaderList);
+                _ ->
+                    undefined
+            end,
+            BodyStr = case application:get_env(rabbithub, log_message_body) of
+                {ok, true} -> Req:recv_body();
+                _ -> undefined                
+            end,
+            rabbit_log:info("RabbitHub:  Message Published for Resource ~p~n  Message Id: ~p~n  Correlation Id:  ~p~n  HTTP Headers: ~p~n  Msg Body:  ~p~n", [Resource, MsgId, CorrId, HeaderList2, BodyStr]);            
+        _ -> do_nothing
     end,
 
     Msg = extract_message(rabbithub:r(exchange, ""), ParsedQuery, MsgId, CorrId, Req),
@@ -1411,6 +1400,13 @@ convert_status(Value) ->
             list_to_binary(ValueString2)
     end.
                         
+%% helper functions for building log statement with http headers
+build_header_string(Req, L) -> build_header_string(Req, L, []).
+
+build_header_string(Req, [H|T], ResultList) -> build_header_string(Req, T, lists:append(ResultList, [{H, Req:get_header_value(H)}]));
+
+build_header_string(_Req, [], ResultList) -> ResultList. 
+%----
 
 handle_hub_post(Req) ->
     Req:respond({200, [], "You posted!"}).
