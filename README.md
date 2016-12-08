@@ -140,6 +140,7 @@ A Unique Subscriber is defined by
 | hub.max_tps | Simple throttling mechanism to limit the Maximum Transactions Per Second that can be sent to a subscriber.  See Max TPS section for details |
 | hub.ha_mode | Ability to set HA Mode for a consumer for an individual subscription overriding the enviornment variable settings.  See High Availability Consumers section for details |
 | hub.expires | filters get all subscriptions to only suscriptions that will expire within *n* days |
+| hub.basic_auth | allows the setting of basic auth credentials for calling the subscriber.  The value must be the base64 of user:pass. |
 
 
 ### Other Publishing Options
@@ -181,7 +182,13 @@ A simple method to throttle messages being sent to subscribers.  Rabbithub follo
 	Delay = 400 milliseconds
 	
 	Note:  setting environment variable log_maxtps_delay = true will log this value on each POST.
- 
+
+#### Subscriber Basic Auth
+Ability to configure basic authentication credentials for RabbitHub to use when it calls the subscriber.  The value of the parameter is the base64 of user:pass.  Example:
+	~$ echo -n user:pass | base64
+	~$ dXNlcjpwYXNz
+	POST ../subscribe/q/*queue_name* Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&hub.topic=foo&hub.verify=sync&hub.lease_seconds=86400&hub.basic_auth=dXNlcjpwYXNz"
+
 ## Proxy server support
 
 If RabbitHub is being used behind a firewall, it may be necessary to route HTTP(s) requests to callback URLs via a proxy server. A proxy server can be specified for RabbitHub by defining `http_client_options` in `rabbitmq.config` as illustrated below, where the same proxy server has been specified for both HTTP and HTTPS, and the proxy server will not be used for requests to `localhost`.
