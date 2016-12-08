@@ -78,6 +78,7 @@ handle_req(Req) ->
                            binary_to_list(<<"errors">>),
                            ParsedQuery,
                            Req);
+       
         %% BRC
         [<<>>, VHost, Facet, ResourceType, Name] ->
             case check_resource_type(ResourceType) of
@@ -502,6 +503,13 @@ extract_maxtps(ParsedQuery) ->
         InvalidValue when InvalidValue =< 0 -> 0;
         Value -> Value
     end.
+    
+extract_basic_auth(ParsedQuery) ->
+
+    case catch param(ParsedQuery, "hub.basic_auth", undefined) of
+        {'EXIT', _Reason} -> undefined;
+        Value -> Value
+    end.    
         
 %%subscribing or unsubscribing a subscription does require the subscriber to be available
 validate_subscription_request(Req, ParsedQuery, SourceResource, ActualUse, Fun) ->
@@ -665,7 +673,16 @@ convert_amq_to_binary(Amq) ->
     AmqString = re:replace(re:replace(Flat, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),
     AmqBinary = list_to_binary(AmqString),
     AmqBinary.
-
+    
+%%GF:  function to conver outbound auth to list for nested json.  Currently only works with basic auth    
+convert_outbound_auth_to_binary(Auth) ->
+    AuthTuple = case Auth of
+        undefined -> undefined;
+        AuthVal   -> [{auth_type, AuthVal#rabbithub_outbound_auth.auth_type}, 
+                 {auth_config, list_to_binary((AuthVal#rabbithub_outbound_auth.auth_config)#rabbithub_outbound_auth_basicauth_config.authorization)}]
+    end,     
+    AuthTuple.
+    
 %% GF: function to convert list of leases from database to JSON
 
 convert_leases_to_json(Leases) ->
@@ -680,7 +697,8 @@ convert_leases_to_json(Leases) ->
                {ha_mode, Lease#rabbithub_lease.ha_mode},
                {status, Lease#rabbithub_lease.status},
                {maxtps, Lease#rabbithub_lease.max_tps},
-               {pseudo_queue, convert_amq_to_binary(Lease#rabbithub_lease.pseudo_queue)}]
+               {pseudo_queue, convert_amq_to_binary(Lease#rabbithub_lease.pseudo_queue)},
+       	       {outbound_auth, convert_outbound_auth_to_binary(Lease#rabbithub_lease.outbound_auth)}]               
 	    || Lease <- Leases]}]},
     Resp = mochijson2:encode(Data),
     Resp.
@@ -751,6 +769,9 @@ manage_validation(SubscriptionTuple, TableId) ->
         N when is_integer(N) -> N;
         _Other -> 0
     end,
+    
+    OutboundAuth = find_and_get_element(element(2, SubscriptionTuple), <<"outbound_auth">>, 2),
+
 %% TODO add error handling for all properties
 %%    case lists:member(false, [Callback, Topic, LeaseSeconds, Vhost, ResourceType, ResourceName]) of
 %%        true ->                
@@ -762,14 +783,14 @@ manage_validation(SubscriptionTuple, TableId) ->
         active ->        
             case do_validate(Callback, Topic, LeaseSeconds, subscribe, none) of
                 ok -> 
-                    create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3, MaxTps2);
+                    create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3, MaxTps2, OutboundAuth);
                 {error, Reason} -> 
                     ReasonString = lists:flatten(io_lib:format("~p", [{error, Reason}])),
                     ReasonString2 = re:replace(re:replace(ReasonString, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),
                     [{node(), list_to_binary(ReasonString2)}]        
             end;
         inactive -> %insert record but do not validate callback url        
-            create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3, MaxTps)
+            create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3, MaxTps, OutboundAuth)
     end,  
     {atomic, CurrentLeaseList} = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Subscription}) end),  
     CurrentLease = lists:nth(1, CurrentLeaseList),
@@ -780,7 +801,7 @@ manage_validation(SubscriptionTuple, TableId) ->
     ets:insert(TableId, BatchRecord).      
 
 %% GF:  create_subscription calls the create function in rabbithub_subscription and starts the lease
-create_subscription(Callback, Topic, LeaseSeconds, Resource, Status, HA, MaxTps) ->
+create_subscription(Callback, Topic, LeaseSeconds, Resource, Status, HA, MaxTps, OutboundAuth) ->
     Sub = #rabbithub_subscription{resource = Resource,
                                 topic = Topic,
                                 callback = Callback},
@@ -792,12 +813,19 @@ create_subscription(Callback, Topic, LeaseSeconds, Resource, Status, HA, MaxTps)
             end;
          OtherModes -> OtherModes
     end, 
+
+    OutboundAuth2 = case OutboundAuth of
+        undefined -> undefined;
+        <<"undefined">>  -> undefined;        
+        AuthValue -> #rabbithub_outbound_auth{auth_type = binary_to_atom(proplists:get_value(<<"auth_type">>, element(2, OutboundAuth)), latin1),
+                                    auth_config = #rabbithub_outbound_auth_basicauth_config{authorization = binary_to_list(proplists:get_value(<<"auth_config">>, element(2, OutboundAuth)))}}
+    end,
     
-    case rabbithub_subscription:create(Sub, LeaseSeconds, HAMode, MaxTps, Status) of
+    case rabbithub_subscription:create(Sub, LeaseSeconds, HAMode, MaxTps, Status, OutboundAuth2) of
         %% add active inactive check, do not start subs if inactive, shutdown if existing.
         ok ->   
             case Status of
-                active ->       
+                active ->                           
                     case HAMode of
                         none -> [{node(), ok}];
                         _Mode1 ->
@@ -829,7 +857,7 @@ create_subscription(Callback, Topic, LeaseSeconds, Resource, Status, HA, MaxTps)
     end.
 
 find_existing_consumers(Subscription) ->    
-    Con = #consumer{subscription = Subscription, node = '_'},
+    Con = #rabbithub_consumer{subscription = Subscription, node = '_'},
     WildPattern = mnesia:table_info(rabbithub_subscription_pid, wild_pattern),
     Pattern = WildPattern#rabbithub_subscription_pid{consumer = Con},
     F = fun() -> mnesia:match_object(Pattern) end,   
@@ -884,21 +912,69 @@ perform_request('GET', subscriptions, '', errors, _Resource, _ParsedQuery, Req) 
      
 
 %% GF: GET subscriptions returns a list of all leases in the database
-perform_request('GET', subscriptions, '', none, _Resource, _ParsedQuery, Req) ->
-     {atomic, Leases} =
-        mnesia:transaction(fun () ->
-                                   mnesia:foldl(fun (Lease, Acc) -> [Lease | Acc] end,
-                                                [],
-                                                rabbithub_lease)
-                           end),                          
-     Json = convert_leases_to_json(Leases),
-     Req:respond({200, [{"Content-Type", "application/json"}], Json });
+perform_request('GET', subscriptions, '', none, _Resource, ParsedQuery, Req) ->
+    Expires = case ParsedQuery of
+        [] -> missing;
+        PQVal ->
+            list_to_integer(param(PQVal, "hub.expires", 0))
+    end,
+    
+    LeasesToReturn = case Expires of
+        missing ->            
+           {atomic, Leases} =
+               mnesia:transaction(fun () ->
+                                          mnesia:foldl(fun (Lease, Acc) -> [Lease | Acc] end,
+                                                       [],
+                                                       rabbithub_lease)
+                                  end),
+           Leases;                                  
+        Days when is_integer(Days) ->  
+            Today = rabbithub_subscription:system_time(),
+            ExpireBeforeN = (Days * 86400000000) + Today,
+            MatchHead = #rabbithub_lease{subscription='$1', lease_expiry_time_microsec='$2', lease_seconds='$3', 
+                            ha_mode='$4', max_tps='$5', status='$6', pseudo_queue='$7', outbound_auth='$8'},
+            Guard = {'<', '$2', ExpireBeforeN},
+            Result = '$_', 
+            {atomic, LeasesToExport} = mnesia:transaction(
+                  fun () ->  
+                      mnesia:select(rabbithub_lease, [{MatchHead, [Guard], [Result]}])
+                  end),
+            LeasesToExport
+    end,                          
+    Json = convert_leases_to_json(LeasesToReturn),
+    Req:respond({200, [{"Content-Type", "application/json"}], Json });
+     
+%% GF: GET subscriptions for 1 specific subscription
+perform_request('GET', subscriptions, '', _ResourceTypeAtom,  Resource, ParsedQuery, Req) ->
+    Callback = param(ParsedQuery, "hub.callback", missing),
+    Topic = param(ParsedQuery, "hub.topic", missing),
+    Json = case lists:member(missing, [Callback, Topic]) of
+        true ->
+            Req:respond({400, [], "Missing required parameter"});
+        false ->
+            Sub = #rabbithub_subscription{resource = Resource,
+                                            topic = Topic,
+                                            callback = Callback},                                                      
+            {atomic, Data} = mnesia:transaction(
+                fun () ->
+                    case  mnesia:read(rabbithub_lease, Sub) of
+                        [] -> 
+                            Data = {},
+                            Data;
+                        [Lease] -> 
+                            Data = convert_leases_to_json([Lease]),
+                            Data
+                    end 
+            end),
+            Data
+    end,  
+    Req:respond({200, [{"Content-Type", "application/json"}], Json });     
      
 %% GF:  New endpoint to upload Subscriptions in batch
 perform_request('POST', subscriptions, '', none, _Resource, _ParsedQuery, Req) ->    
      Body = Req:recv_body(), 
      try mochijson2:decode(Body) of
-         DecodedBody ->             
+         DecodedBody ->                
              Resp = batch_process_subscriptions(DecodedBody),      
              RespJson = convert_batch_response_body_to_json(Resp),
              Req:respond({202, [{"Content-Type", "application/json"}], RespJson})
@@ -1125,7 +1201,7 @@ perform_request('POST', subscribe, '', ResourceTypeAtom, Resource, _ParsedQuery,
             Req:respond({400, [], "Bad content-type; expected application/x-www-form-urlencoded"})
     end;
 
-perform_request('POST', subscribe, subscribe, _ResourceTypeAtom, Resource, ParsedQuery, Req) ->
+perform_request('POST', subscribe, subscribe, _ResourceTypeAtom, Resource, ParsedQuery, Req) ->                          
     Cont = case Resource#resource.kind of
         queue ->
             case rabbit_amqqueue:lookup(Resource) of
@@ -1178,8 +1254,14 @@ perform_request('POST', subscribe, subscribe, _ResourceTypeAtom, Resource, Parse
                                                 _Other -> none
                                             end
                                     end,                                                       
-                                    MaxTps = extract_maxtps(ParsedQuery),     
-                                    case rabbithub_subscription:create(Sub, LeaseSeconds, HAMode, MaxTps, active) of
+                                    MaxTps = extract_maxtps(ParsedQuery), 
+                                    BasicAuth = extract_basic_auth(ParsedQuery),
+                                    OutboundAuth = case BasicAuth of
+                                        undefined -> undefined;
+                                        AuthValue -> #rabbithub_outbound_auth{auth_type = basic_auth,
+                                                                    auth_config = #rabbithub_outbound_auth_basicauth_config{authorization = AuthValue}}
+                                    end,
+                                    case rabbithub_subscription:create(Sub, LeaseSeconds, HAMode, MaxTps, active, OutboundAuth) of
                                         ok ->                                                                                
                                             case HAMode of
                                                 none -> ok;
@@ -1342,7 +1424,7 @@ deactivate_ha_consumers(Subscription) ->
            end.
             
 remove_pid(N, Subscription) ->
-    Consumer = #consumer{subscription = Subscription, node = N},
+    Consumer = #rabbithub_consumer{subscription = Subscription, node = N},
     {atomic, ok} =
         mnesia:transaction(fun () -> mnesia:delete({rabbithub_subscription_pid, Consumer}) end),
      ok.   

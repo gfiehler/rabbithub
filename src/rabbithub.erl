@@ -262,7 +262,9 @@ format_xheader({K, _T, V}) ->
     lists:flatten(io_lib:format("~s = ~s", [K, V])).
     
 format_headers(Headers) ->
-    string:join(lists:map(fun format_xheader/1, Headers), ", ").        
+    %% remove x-death headers before formatting to send to subscriber
+    Headers2 = lists:keydelete(<<"x-death">>, 1, Headers),
+    string:join(lists:map(fun format_xheader/1, Headers2), ", ").        
 
 deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
                  #basic_message{routing_keys = [RoutingKeyBin | _],
@@ -318,6 +320,7 @@ deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
                     (Content0#content.properties)#'P_basic'.correlation_id
            end,   
            MsgHeaders = (Content0#content.properties)#'P_basic'.headers,
+           
            MsgHdrs = case MsgHeaders of
                 undefined -> 
                     undefined;
@@ -367,10 +370,29 @@ deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
 					  {"x-rabbithub-msg_header", MH} | ExtraHeaders]					  	  
                                                 		        
           end, 
+          
+          %% get subscription configuration for maxtps and outbound auth
+          R3 = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Subscription}) end),
+          Subs = case R3 of
+              {atomic, []} ->
+                  [];       
+              {atomic, X} ->
+                  X;
+              {aborted, Reason2} -> 
+                  {error, Reason2}
+          end,
+          Sub = lists:nth(1, Subs),
+          %% check if outbound authentication is configured and add appropriate headers
+          OutboundAuth = case Sub#rabbithub_lease.outbound_auth of
+             undefined -> [];
+             AuthVal -> [{"Authorization", "Basic " ++(AuthVal#rabbithub_outbound_auth.auth_config)#rabbithub_outbound_auth_basicauth_config.authorization}]
+          end,
+          %{'Authorization',"Basic Z3Vlc3Q6Z3Vlc3Q="},
+          
+          AllHeaders1 =   lists:append(AllHeaders, OutboundAuth),
            
            
-           
-		   Payload = {URL, AllHeaders, ContentType, PayloadBin},
+		   Payload = {URL, AllHeaders1, ContentType, PayloadBin},
 						 
 		   % Log the request if the environment variable has been set - default
 		   % is not to log the request
@@ -389,6 +411,7 @@ deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
 		   end,
 		   		   
 		   BeforeReqTimeMicro = rabbithub_subscription:system_time(),
+		   		                                    
            HTTPResp = case httpc:request(post, Payload, HttpReqOpts, []) of
                {ok, {{_Version, StatusCode, _StatusText}, _Headers, _Body}} ->
                   if
@@ -402,23 +425,13 @@ deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
            end,
    		   AfterReqTimeMicro = rabbithub_subscription:system_time(),
    		   
-   		   %% check for throttling   		              
-           R3 = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Subscription}) end),
-           Subs = case R3 of
-                {atomic, []} ->
-                    [];       
-                {atomic, X} ->
-                    X;
-                {aborted, Reason2} -> 
-                    {error, Reason2}
-           end,
-           Sub = lists:nth(1, Subs),
+   		   %% calculate max tps
            MaxTps = Sub#rabbithub_lease.max_tps,
            case MaxTps of
                0 -> ok;
                N when N > 0 ->                   
                    %% get consumer list for this subscription
-                   Con = #consumer{subscription = Subscription, node = '_'},    
+                   Con = #rabbithub_consumer{subscription = Subscription, node = '_'},    
                    WildPattern = mnesia:table_info(rabbithub_subscription_pid, wild_pattern),
                    Pattern = WildPattern#rabbithub_subscription_pid{consumer = Con},
                    F = fun() -> mnesia:match_object(Pattern) end,   

@@ -1,7 +1,7 @@
 -module(rabbithub_subscription).
 
 -export([start_subscriptions/0]).
--export([create/5, delete/1, deactivate/1]).
+-export([create/6, delete/1, deactivate/1]).
 -export([start_link/1]).
 -export([register_subscription_pid/3, erase_subscription_pid/1, delete_local_consumer/1]).
 
@@ -34,7 +34,7 @@ start_subscriptions() ->
                            end),
     lists:foreach(fun start/1, Leases).
 
-create(Subscription, LeaseSeconds, HAMode, MaxTps, Status) ->
+create(Subscription, LeaseSeconds, HAMode, MaxTps, Status, OutboundAuth) ->
     rabbithub_consumer:erase_subscription_err(Subscription),
     RequestedExpiryTime = system_time() + LeaseSeconds * 1000000,    
     Lease = #rabbithub_lease{subscription = Subscription,
@@ -42,7 +42,8 @@ create(Subscription, LeaseSeconds, HAMode, MaxTps, Status) ->
                              lease_seconds = LeaseSeconds,
                              ha_mode = HAMode,
                              status = Status,
-                             max_tps = MaxTps},
+                             max_tps = MaxTps,
+                             outbound_auth = OutboundAuth},
                              
                              
     {atomic, Result} = mnesia:sync_transaction(
@@ -50,7 +51,7 @@ create(Subscription, LeaseSeconds, HAMode, MaxTps, Status) ->
             case mnesia:read(rabbithub_lease, Subscription) of
                 [ExistingRecord] ->                
                     UpdatedRecord = ExistingRecord#rabbithub_lease{lease_expiry_time_microsec = RequestedExpiryTime, 
-                                        lease_seconds = LeaseSeconds, ha_mode = HAMode, status = Status, max_tps = MaxTps },
+                                        lease_seconds = LeaseSeconds, ha_mode = HAMode, status = Status, max_tps = MaxTps, outbound_auth = OutboundAuth },
                     {atomic, ok} = mnesia:transaction(fun () ->                         
                         ok = mnesia:write(UpdatedRecord) end),
                     UpdatedRecord;                        
@@ -64,7 +65,7 @@ create(Subscription, LeaseSeconds, HAMode, MaxTps, Status) ->
     
 %%GF changing unsubscription to set status to inactive instead of deleting from table
 deactivate(Subscription) ->
-    Consumer = #consumer{subscription = Subscription, node = node()},
+    Consumer = #rabbithub_consumer{subscription = Subscription, node = node()},
     rabbit_log:info("RabbitHub deactivate subscription~n~p~n", [Subscription]),
     
     case update_lease_status(Subscription, inactive) of
@@ -104,7 +105,7 @@ update_lease_pseudo_queue(Subscription, Q) ->
     mnesia:transaction(LeaseUpdateFun).
 
 delete(Subscription) ->
-    Consumer = #consumer{subscription = Subscription, node = node()},
+    Consumer = #rabbithub_consumer{subscription = Subscription, node = node()},
     rabbit_log:info("RabbitHub deleting subscription~n~p~n", [Consumer]),
     R3 = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Subscription}) end),
     R4 = case R3 of
@@ -152,7 +153,7 @@ delete_local_consumer(Subscription) ->
     delete_local_consumer(Subscription, Lease).
     
 delete_local_consumer(Subscription, _Lease) ->
-    Consumer = #consumer{subscription = Subscription, node = node()},
+    Consumer = #rabbithub_consumer{subscription = Subscription, node = node()},
     Consumers =        
          mnesia:transaction(
               fun () ->
@@ -282,7 +283,7 @@ register_subscription_pid1(#rabbithub_lease{subscription = Subscription,
                            Pid) ->                          
     NowMicro = system_time(),
     Node = node(),    
-    Consumer = #consumer{subscription = Subscription, node = node()}, 
+    Consumer = #rabbithub_consumer{subscription = Subscription, node = node()}, 
     case NowMicro > ExpiryTimeMicro of
         true ->
             %% Expired.
@@ -330,7 +331,7 @@ register_subscription_pid1(#rabbithub_lease{subscription = Subscription,
     end.
 
 erase_subscription_pid(Subscription) ->
-    Consumer = #consumer{subscription = Subscription, node = node()}, 
+    Consumer = #rabbithub_consumer{subscription = Subscription, node = node()}, 
     {atomic, ok} =
         mnesia:transaction(fun () -> mnesia:delete({rabbithub_subscription_pid, Consumer}) end),
     ok.
