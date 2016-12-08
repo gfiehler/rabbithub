@@ -116,7 +116,9 @@ A Rabbitmq Management Plugin for RabbitHub can be found here
 |  |   | X | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Subscribe to an Exchange.  <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=async&hub.lease_seconds=86400".<br>See Table below for Options.  |
 |  |   | X | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Unsubscribe to a Queue. <br>Payload: "hub.mode=unsubscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync".<br>See Table below for Options.   |
 |  |   | X | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Unsubscribe to an Exchange.  <br>Payload: "hub.mode=unsubscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync&hub.verify=async&hub.lease_seconds=86400".<br>See Table below for Options.  |
-| X |   |  | X  | /subscriptions  | Batch Import/Export of all subscribers from/to a Json File.  See format below  |
+| X |   |  | X  | /subscriptions  | Batch Import/Export of all subscribers from/to a Json File.  See format below <br> 
+ to retrieve a single subscription /subscriptions/*q or x*/*queue or exchange name*?hub.callback=*callbackurl*&hub.topic=*topic*<br>
+ to retrieve only subscriptions that will expire within *n* days add query parameter hub.expires=n where n is number of days|
 | X |   |  |   | /subscriptions/errors  | Batch Export of all subscriber HTTP POST errors to a Json File.  See format below  |
 
 #### Uniqueness of Subscriber
@@ -139,6 +141,8 @@ A Unique Subscriber is defined by
 | hub.persistmsg | true:  set Rabbitmq to persist this message, should be in conjunction with durable queues. |
 | hub.max_tps | Simple throttling mechanism to limit the Maximum Transactions Per Second that can be sent to a subscriber.  See Max TPS section for details |
 | hub.ha_mode | Ability to set HA Mode for a consumer for an individual subscription overriding the enviornment variable settings.  See High Availability Consumers section for details |
+| hub.expires | filters get all subscriptions to only suscriptions that will expire within *n* days |
+
 
 ### Other Publishing Options
 #### Headers Exchange Support
