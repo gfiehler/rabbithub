@@ -135,7 +135,7 @@ A Unique Subscriber is defined by
 | hub.callback | The URL to which RabbitHub should post each message to as it arrives |
 | hub.topic | A filter for selecting a subset of messages |
 | hub.verify  | The subscription verification mode for this request (the value may be either “sync” or “async”). Refer to the PubSubHubBub specification for additional details. |
-| hub.lease | Subscriber-provided lease duration in seconds. After this time, the subscription will be terminated. The default lease is approximately 30 days, and the maximum lease is approximately 1000 years. Refer to the PubSubHubBub specification for additional information.  |
+| hub.lease_seconds | Subscriber-provided lease duration in seconds. After this time, the subscription will be terminated. The default lease is approximately 30 days, and the maximum lease is approximately 1000 years. Refer to the PubSubHubBub specification for additional information.  |
 | hub.persistmsg | true:  set Rabbitmq to persist this message, should be in conjunction with durable queues. |
 | hub.max_tps | Simple throttling mechanism to limit the Maximum Transactions Per Second that can be sent to a subscriber.  See Max TPS section for details |
 | hub.ha_mode | Ability to set HA Mode for a consumer for an individual subscription overriding the enviornment variable settings.  See High Availability Consumers section for details |
