@@ -187,7 +187,7 @@ All Options<br>
 		}
 	}
 }
-```<br>
+```
 
 ### Other Publishing Options
 #### Headers Exchange Support
@@ -391,10 +391,21 @@ The following api will return a json formatted list of the current subscribers f
  - resource_name:  name of resource
  - topic:          routing key from hub.topic parameter
  - callback:       url of callback subscriber
- - lease_expiry_time_microsec: date time of subscription expiration in microseconds- http://localhost:15670/subscriptions   
+ - lease_expiry_time_microsec: date time of subscription expiration in microseconds- http://localhost:15670/subscriptions.  This field is ignored on a POST.  
  - lease_seconds:  the lease time in seconds as given at time of subscription
  - ha_mode:        HA Mode (all, n, none)
  - status:         active/inactive (equivalent to hub.mode subscribe/unsubscribe
+ - max_tps:        number of transactions per second allowed to this subscriber
+ - pseudo_queue:   when subscribing to an exchange, a queue is created for the subscription by RabbitHub, this is the definition of this queue.  This field is ignored on a POST.
+ - outbound_auth:  section to hold authentication values for calling a subscribers callback url.  This has 2 data fields, auth_type and auth_config.  Currently only basic_auth is supported.
+ - auth_type:      basic_auth is the only currently supported auth_type.
+ - auth_config:    the base64 encoded string for the user:pass for basic authentication when calling the subscriber callback url
+ - contact:        this section hold contact information about the subscriber
+ - app_name:       the name of the subscribing application
+ - contact_name:   the contact person for the subscription
+ - phone:          the contact phone number for the subscription
+ - email:          the contact email address for the subscription
+ - description:    a description of the subscription
  
 ```javascript
 {
