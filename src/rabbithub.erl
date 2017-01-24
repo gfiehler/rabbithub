@@ -23,8 +23,8 @@
                     {requires, routing_ready}]}).
 
 -include_lib("xmerl/include/xmerl.hrl").
--include_lib("rabbit_common/include/rabbit.hrl").
--include_lib("rabbit_common/include/rabbit_framing.hrl").
+-include_lib("rabbit-common/include/rabbit.hrl").
+-include_lib("rabbit-common/include/rabbit_framing.hrl").
 -include("rabbithub.hrl").
 
 

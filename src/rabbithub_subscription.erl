@@ -10,17 +10,17 @@
 -export([system_time/0]).
 
 -include("rabbithub.hrl").
--include_lib("rabbit_common/include/rabbit.hrl").
--include_lib("rabbit_common/include/rabbit_framing.hrl").
+-include_lib("rabbit-common/include/rabbit.hrl").
+-include_lib("rabbit-common/include/rabbit_framing.hrl").
 
 %% Should be exported by timer module, but isn't
 %this cannot be  used until on erlang 18+
-%system_time() -> 
-%    erlang:system_time(1000000).
+system_time() -> 
+    erlang:system_time(1000000).
 
-system_time() ->
-    {MegaSec, Sec, MicroSec} = now(),
-    1000000 * (MegaSec * 1000000 + Sec) + MicroSec.
+%system_time() ->
+%    {MegaSec, Sec, MicroSec} = now(),
+%    1000000 * (MegaSec * 1000000 + Sec) + MicroSec.
 
 start_subscriptions() ->
     rabbit_log:info("Starting subscriptions...~n"),
@@ -96,7 +96,7 @@ check_and_delete_outbound_auth(Subscription) ->
         end
     end).
 
-check_and_delete_contact(Subscription, Contact) ->    
+check_and_delete_contact(Subscription, _Contact) ->    
     mnesia:transaction(fun () ->
         case mnesia:read(rabbithub_subscriber_contact_info, Subscription) of
             [] -> do_nothing;

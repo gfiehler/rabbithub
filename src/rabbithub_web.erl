@@ -3,8 +3,8 @@
 -export([start/0, handle_req/1, listener/0]).
 
 -include("rabbithub.hrl").
--include_lib("rabbit_common/include/rabbit.hrl").
--include_lib("rabbit_common/include/rabbit_framing.hrl").
+-include_lib("rabbit-common/include/rabbit.hrl").
+-include_lib("rabbit-common/include/rabbit_framing.hrl").
 
 -define(APPLICATION_XSLT, ("/" ++ rabbithub:canonical_basepath() ++ "/static/application.xsl.xml")).
 
@@ -1820,7 +1820,7 @@ pick_n_random_nodes(N, List) when N > 0 ->
                         true ->  ListLen;
                         false -> N
                        end,
-            Index = random:uniform(length(List)),
+            Index = rand:uniform(length(List)),
             Element = lists:nth(Index,List),
             Result = [Element] ++ pick_n_random_nodes(NumNodes-1, lists:delete(Element, List)),
             Result

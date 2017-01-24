@@ -5,8 +5,8 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2, code_change/3, erase_subscription_err/1]).
 
 -include("rabbithub.hrl").
--include_lib("rabbit_common/include/rabbit.hrl").
--include_lib("rabbit_common/include/rabbit_framing.hrl").
+-include_lib("rabbit-common/include/rabbit.hrl").
+-include_lib("rabbit-common/include/rabbit_framing.hrl").
 
 -record(state, {subscription, q_monitor_ref, consumer_tag}).
 
