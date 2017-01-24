@@ -66,7 +66,7 @@ an artifact of what Google's public PSHB instance is mailing out,
 rather than anything intrinsic in pubsub-over-webhooks.
 
 ## Installation
-This release is for rabbitmq 3.6.3 and prior.  For rabbitmq 3.6.6 please see release specific to 3.6.6.
+This release is for rabbitmq 3.6.6.  For prior versions of Rabbitmq please use the latest 3.6.3 branch.
 To install from source (requires Erlang R15B01 or higher):
 
     git clone https://github.com/brc859844/rabbithub
