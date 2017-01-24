@@ -155,7 +155,7 @@ Content-Type:  application/x-www-form-urlencoded<br>
 <br>
 Content-Type: application/json<br>
 Required Fields<br>
-`
+```javascript
 {
 	"hub": {
 		"callback": "http://10.1.1.8:4567/sub1",
@@ -164,10 +164,10 @@ Required Fields<br>
 		"verify": "sync",
 	}
 }
-`
+```
 <br>
 All Options<br>
-`
+```javascript
 {
 	"hub": {
 		"callback": "http://10.1.1.8:4567/sub1",
@@ -187,7 +187,7 @@ All Options<br>
 		}
 	}
 }
-`<br>
+```<br>
 
 ### Other Publishing Options
 #### Headers Exchange Support
