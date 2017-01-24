@@ -66,7 +66,7 @@ an artifact of what Google's public PSHB instance is mailing out,
 rather than anything intrinsic in pubsub-over-webhooks.
 
 ## Installation
-
+This release is for rabbitmq 3.6.3 and prior.  For rabbitmq 3.6.6 please see release specific to 3.6.6.
 To install from source (requires Erlang R15B01 or higher):
 
     git clone https://github.com/brc859844/rabbithub
@@ -112,10 +112,10 @@ A Rabbitmq Management Plugin for RabbitHub can be found here
 | :---: |:---:| :---:| :---:| :------| :------|
 |  | X  | X  | X | /endpoint/q/*queue_name* <br> /*vhost*/endpoint/q/*queue_name* | Create/Delete a Rabbitmq Queue|
 |  | X  | X  | X | /endpoint/x/*exchange_name* <br> /*vhost*/endpoint/x/*exchange_name* | Create/Delete a Rabbitmq Exchange.<br> Publish Message to Exchange (Query Parameter:  hub.topic=topic_name,<br> Payload:  Message Body.  <br> See Table Below for all publishing options|
-|  |   | X | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Subscribe to a Queue. <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync&hub.lease_seconds=86400".<br>See Table below for Options.   |
-|  |   | X | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Subscribe to an Exchange.  <br>Payload: "hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=async&hub.lease_seconds=86400".<br>See Table below for Options.  |
-|  |   | X | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Unsubscribe to a Queue. <br>Payload: "hub.mode=unsubscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync".<br>See Table below for Options.   |
-|  |   | X | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Unsubscribe to an Exchange.  <br>Payload: "hub.mode=unsubscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync&hub.verify=async&hub.lease_seconds=86400".<br>See Table below for Options.  |
+|  |   | X | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Subscribe to a Queue. <br> See below for payload options.<br>See Table below for Options.   |
+|  |   | X | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Subscribe to an Exchange.  <br>See below for payload options..<br>See Table below for Options.  |
+|  |   | X | X  | /subscribe/q/*queue_name* <br> /*vhost*/subscribe/q/*queue_name* | Unsubscribe to a Queue. <br>See below for payload options..<br>See Table below for Options.   |
+|  |   | X | X  | /subscribe/x/*exchange_name* <br> /*vhost*/subscribe/x/*exchange_name* | Unsubscribe to an Exchange.  <br>See below for payload options..<br>See Table below for Options.  |
 | X |   |  | X  | /subscriptions <br> /subscriptions/q/*queue_name* <br> /subscriptions/x/*exchange_name*  | Batch Import/Export of all subscribers from/to a Json File.  See format below <br>to retrieve a single subscription /subscriptions/*q or x*/*queue or exchange name*?hub.callback=*callbackurl*&hub.topic=*topic*<br> to retrieve only subscriptions that will expire within *n* days add query parameter hub.expires=n where n is number of days|
 | X |   |  |   | /subscriptions/errors  | Batch Export of all subscriber HTTP POST errors to a Json File.  See format below  |
 
@@ -132,7 +132,7 @@ A Unique Subscriber is defined by
 ### Subscription Options
 | Parameter  | Description  |
 | :--- |:---| 
-| hub.callback | The URL to which RabbitHub should post each message to as it arrives |
+| hub.mode | 'subscribe' to create a new subscription, 'unsubscribe' to deactivate an existing subscription |
 | hub.topic | A filter for selecting a subset of messages |
 | hub.verify  | The subscription verification mode for this request (the value may be either “sync” or “async”). Refer to the PubSubHubBub specification for additional details. |
 | hub.lease_seconds | Subscriber-provided lease duration in seconds. After this time, the subscription will be terminated. The default lease is approximately 30 days, and the maximum lease is approximately 1000 years. Refer to the PubSubHubBub specification for additional information.  |
@@ -141,7 +141,52 @@ A Unique Subscriber is defined by
 | hub.ha_mode | Ability to set HA Mode for a consumer for an individual subscription overriding the enviornment variable settings.  See High Availability Consumers section for details |
 | hub.expires | filters get all subscriptions to only suscriptions that will expire within *n* days |
 | hub.basic_auth | allows the setting of basic auth credentials for calling the subscriber.  The value must be the base64 of user:pass. |
+| hub.app_name | allows the setting of an application name for the subscriber. |
+| hub.contact_name | allows the setting of contact name for the subscriber. |
+| hub.phone | allows the setting of a phone number for the subscriber. |
+| hub.email | allows the setting of an email address for the subscriber. |
+| hub.description | allows the setting of a description for the subscriber. |
 
+### Subscription Payloads
+Content-Type:  application/x-www-form-urlencoded
+'''
+"hub.mode=subscribe&hub.callback=http://10.1.1.8:4567/sub1&<br>hub.topic=foo&hub.verify=sync&hub.lease_seconds=86400"
+'''
+
+Content-Type: application/json
+Required Fields
+'''
+{
+	"hub": {
+		"callback": "http://10.1.1.8:4567/sub1",
+		"topic": "foo",
+		"mode": "subscribe",
+		"verify": "sync",
+	}
+}
+'''
+All Options
+'''
+{
+	"hub": {
+		"callback": "http://10.1.1.8:4567/sub1",
+		"topic": "foo",
+		"lease_seconds": 1234,
+		"mode": "subscribe",
+		"verify": "sync",
+		"max_tps": 3,
+		"ha_mode": "all",
+		"basic_auth": "base64ofuser:pass",
+		"contact": {
+			"app_name": "My App Name",
+			"contact_name": "My Name",
+			"phone": "111-111-1111",
+			"email": "me@email.com",
+			"description": "this is my subscriber app"
+		}
+	}
+}
+'''
 
 ### Other Publishing Options
 #### Headers Exchange Support
@@ -348,33 +393,49 @@ The following api will return a json formatted list of the current subscribers f
  - lease_expiry_time_microsec: date time of subscription expiration in microseconds- http://localhost:15670/subscriptions   
  - lease_seconds:  the lease time in seconds as given at time of subscription
  - ha_mode:        HA Mode (all, n, none)
- - status:         active/inactive
+ - status:         active/inactive (equivalent to hub.mode subscribe/unsubscribe
  
 ```javascript
 {
 	"subscriptions": [{
-		"vhost": "/",
-		"resource_type": "queue",
-		"resource_name": "ha.q2",
-		"topic": "inactivetest",
-		"callback": "http://callbackdomain/subscriber/s2",
-		"lease_expiry_time_microsec": 1472911582355564,
-		"lease_seconds": 1000000,
-		"ha_mode": "all",
-		"status": "inactive",
-		"pseudo_queue": "[undefined]"
+		"vhost": "rhtest2",
+		"resource_type": "exchange",
+		"resource_name": "xfanout1",
+		"topic": "testx1",
+		"callback": "http://localhost:8999/rabbithub/s1",
+		"lease_expiry_time_microsec": 4638804849466651,
+		"lease_seconds": 3153600000,
+		"ha_mode": 1,
+		"status": "active",
+		"max_tps": 0,
+		"pseudo_queue": "[{amqqueue,{resource,<<\"rhtest2\">>,queue, <<\"amq.http.pseudoqueue-BeIw7rnvjx9i2p_6CS5-0Q\">>}, true,false,none,[],<0.6145.2>,[],[],[],undefined,[],[],live,0}]",
+		"outbound_auth": "undefined",
+		"contact": "undefined"
 	}, {
-		"vhost": "/",
+		"vhost": "rhtest2",
 		"resource_type": "queue",
-		"resource_name": "ha.1",
-		"topic": "activetest",
-		"callback": "http://callbackdomain/subscriber/s1",
-		"lease_expiry_time_microsec": 1472911582355564,
-		"lease_seconds": 1000000,
+		"resource_name": "q1",
+		"topic": "testq1allparams",
+		"callback": "http://localhost:8999/rabbithub/s1",
+		"lease_expiry_time_microsec": 1485291249262811,
+		"lease_seconds": 86400,
 		"ha_mode": "all",
 		"status": "active",
-		"pseudo_queue": "[undefined]"
+		"max_tps": 2,
+		"pseudo_queue": "[undefined]",
+		"outbound_auth": {
+			"auth_type": "basic_auth",
+			"auth_config": "base64encodedstring"
+		},
+		"contact": {
+			"app_name": "my est app 2",
+			"contact_name": "my name",
+			"phone": "111-111-1111",
+			"email": "me@mail.com",
+			"description": "my test app description"
+		}
 	}]
+}
 ```
 ### Import Subscribers in Batch
 The file that was exported in the previous section can then be imported with the following API
@@ -382,7 +443,46 @@ The file that was exported in the previous section can then be imported with the
 <em>Note:  both import and export of subscribers requires a user with rabbitmq tags (roles)  `administrator,rabbithub_admin`</em>
 
 ```javascript
-  curl -d '{"subscriptions":[{"vhost":"/","resource_type":"queue","resource_name":"ha.q2","topic":"ha.q2","callback":"http://RabbitErl19:8999/rabbithub/s2","lease_expiry_time_microsec":1472716785983474, "lease_seconds":1000000,"ha_mode":"none","status":"active"}, {"vhost":"/","resource_type":"queue","resource_name":"ha.q1","topic":"ha.q1","callback":"http://callbackdomain/subscriber/s2", "lease_expiry_time_microsec":1472733774026491, "lease_seconds":1000000,"ha_mode":"none","status":"active"}, {"vhost":"/","resource_type":"queue","resource_name":"ha.q1","topic":"test","callback":"http://callbackdomain/subscriber/s2", "lease_expiry_time_microsec":1472733774026491,"lease_seconds":1000000,"ha_mode":"none","status":"inactive"}]}' --header "content-type:application/json" http://guest:guest@localhost:15670/subscriptions
+  curl -d '{
+	"subscriptions": [{
+		"vhost": "rhtest2",
+		"resource_type": "exchange",
+		"resource_name": "xfanout1",
+		"topic": "testx1",
+		"callback": "http://localhost:8999/rabbithub/s1",
+		"lease_expiry_time_microsec": 4638804849466651,
+		"lease_seconds": 3153600000,
+		"ha_mode": 1,
+		"status": "active",
+		"max_tps": 0,
+		"pseudo_queue": "[{amqqueue,{resource,<<\"rhtest2\">>,queue, <<\"amq.http.pseudoqueue-BeIw7rnvjx9i2p_6CS5-0Q\">>}, true,false,none,[],<0.6145.2>,[],[],[],undefined,[],[],live,0}]",
+		"outbound_auth": "undefined",
+		"contact": "undefined"
+	}, {
+		"vhost": "rhtest2",
+		"resource_type": "queue",
+		"resource_name": "q1",
+		"topic": "testq1allparams",
+		"callback": "http://localhost:8999/rabbithub/s1",
+		"lease_expiry_time_microsec": 1485291249262811,
+		"lease_seconds": 86400,
+		"ha_mode": "all",
+		"status": "active",
+		"max_tps": 2,
+		"pseudo_queue": "[undefined]",
+		"outbound_auth": {
+			"auth_type": "basic_auth",
+			"auth_config": "base64encodedstring"
+		},
+		"contact": {
+			"app_name": "my est app 2",
+			"contact_name": "my name",
+			"phone": "111-111-1111",
+			"email": "me@mail.com",
+			"description": "my test app description"
+		}
+	}]
+}' --header "content-type:application/json" http://guest:guest@localhost:15670/subscriptions
 ```
 Both export and import are also available via the RabbitHub Management UI.
 

@@ -67,11 +67,12 @@ handle_call(Request, _From, State) ->
     {stop, {unhandled_call, Request}, State}.
 
 handle_cast({deliver, _ConsumerTag, AckRequired,
-             {_QNameResource, QPid, MsgId, Redelivered, BasicMessage}},
-            State = #state{subscription = Subscription}) ->        
+             {QNameResource, QPid, MsgId, Redelivered, BasicMessage}},
+            State = #state{subscription = Subscription}) ->   
+                
     RESP = rabbithub:deliver_via_post(Subscription,
                                     BasicMessage,
-                                    [{"X-AMQP-Redelivered", atom_to_list(Redelivered)}]),
+                                    [{"X-AMQP-Redelivered", atom_to_list(Redelivered)}], QNameResource),
     
     case  RESP of
         {ok, _} ->

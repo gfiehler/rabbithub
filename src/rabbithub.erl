@@ -9,7 +9,7 @@
 -export([default_username/0]).
 -export([r/3,r/2]).
 -export([respond_xml/5]).
--export([deliver_via_post/3, error_and_unsub/2, error_and_delete_sub/2]).
+-export([deliver_via_post/4, error_and_unsub/2, error_and_delete_sub/2]).
 
 -export([init/1]).
 
@@ -63,7 +63,12 @@ setup_schema() ->
     ok = create_table(rabbithub_lease,
                      [{attributes, record_info(fields, rabbithub_lease)},
                       {disc_copies, DBNodes}]),
-
+    ok = create_table(rabbithub_outbound_auth,
+                     [{attributes, record_info(fields, rabbithub_outbound_auth)},
+                      {disc_copies, DBNodes}]),
+    ok = create_table(rabbithub_subscriber_contact_info,
+                     [{attributes, record_info(fields, rabbithub_subscriber_contact_info)},
+                      {disc_copies, DBNodes}]),
     %% Create ram_copies (default) for all other tables
     ok = create_table(rabbithub_subscription_pid,
                       [{attributes, record_info(fields, rabbithub_subscription_pid)}]),
@@ -71,7 +76,9 @@ setup_schema() ->
                       [{attributes, record_info(fields, rabbithub_subscription_err)}]),
     ok = mnesia:wait_for_tables([rabbithub_lease,
                                  rabbithub_subscription_pid,
-                                 rabbithub_subscription_err],
+                                 rabbithub_subscription_err, 
+                                 rabbithub_subscriber_contact_info,
+                                 rabbithub_outbound_auth],
                                 5000),
     ok.
 
@@ -267,9 +274,9 @@ format_headers(Headers) ->
     string:join(lists:map(fun format_xheader/1, Headers2), ", ").        
 
 deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
-                 #basic_message{routing_keys = [RoutingKeyBin | _],
+                 BasicMessage = #basic_message{routing_keys = [RoutingKeyBin | _],
                                 content = Content0 = #content{payload_fragments_rev = PayloadRev}},
-                 ExtraHeaders) ->
+                 ExtraHeaders, QNameResource) ->
                  
                  
     case catch mochiweb_util:urlsplit(Callback) of
@@ -296,9 +303,9 @@ deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
            URL = Callback ++ Topic,
 
 		   ContentType = case ContentTypeBin of
-							undefined -> "application/octet-stream";
-							_ -> binary_to_list(ContentTypeBin)
-						 end,           
+		       undefined -> "application/octet-stream";
+				_ -> binary_to_list(ContentTypeBin)
+		   end,           
            %% Adding options to send message_id and correlation_id as http headers to subscriber
            MsgIdHeaderName = case application:get_env(rabbithub, set_message_id) of
                 {ok, MsgIdHeaderName1} -> MsgIdHeaderName1;
@@ -327,47 +334,54 @@ deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
                 _MsgHdrsTmp -> 
                     format_headers(MsgHeaders)                
            end,
+           %% if a x-death header exists get the routing key, queue name and exchange name from the rejected record, otherwise
+           %%  get it from the basic message and passed in queue name
+           {QueueStr, ExchangeStr, RoutingKeyStr, Count} = get_queue_exchange_and_routingkey(BasicMessage, QNameResource),
+           ExtraHeaders1 = case Count of
+               0 -> ExtraHeaders;
+               RedeliverCount -> [{"X-AMQP-Redelivered", "true"}, {"X-AMQP-Redelivered-Count", integer_to_list(RedeliverCount)}]
+           end,
            
            AllHeaders = case {MsgId, CorrId, MsgHdrs} of
                 {undefined, undefined, undefined} ->               
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)} | ExtraHeaders];
+					  {"X-AMQP-Routing-Key", RoutingKeyStr} | ExtraHeaders1];
 					  
                 {MId, undefined, undefined} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, 
-					  {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}| ExtraHeaders];
+					  {"X-AMQP-Routing-Key", RoutingKeyStr}, 
+					  {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}| ExtraHeaders1];
 			    {undefined, undefined, MH} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, 
-					  {"x-rabbithub-msg_header", MH} | ExtraHeaders];
+					  {"X-AMQP-Routing-Key", RoutingKeyStr}, 
+					  {"x-rabbithub-msg_header", MH} | ExtraHeaders1];
 				
 				{undefined, CId, undefined} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, 
-					  {atom_to_list(CorrIdHeaderName), binary_to_list(CId)} | ExtraHeaders];
+					  {"X-AMQP-Routing-Key", RoutingKeyStr}, 
+					  {atom_to_list(CorrIdHeaderName), binary_to_list(CId)} | ExtraHeaders1];
 					  
 			    {undefined, CId, MH} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)}, 
-					  {atom_to_list(CorrIdHeaderName), binary_to_list(CId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders];
+					  {"X-AMQP-Routing-Key", RoutingKeyStr}, 
+					  {atom_to_list(CorrIdHeaderName), binary_to_list(CId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders1];
 					  
 			    {MId, undefined, MH} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},
-					  {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders];		  
+					  {"X-AMQP-Routing-Key", RoutingKeyStr},
+					  {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, {"x-rabbithub-msg_header", MH} | ExtraHeaders1];		  
 					  
 		        {MId, CId, undefined} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},
+					  {"X-AMQP-Routing-Key", RoutingKeyStr},
 					  {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, 
-					  {atom_to_list(CorrIdHeaderName), binary_to_list(CId)} | ExtraHeaders];					  			    
+					  {atom_to_list(CorrIdHeaderName), binary_to_list(CId)} | ExtraHeaders1];					  			    
 									  
 				{MId, CId, MH} -> 
                     [{"Content-length", integer_to_list(size(PayloadBin))},
-					  {"X-AMQP-Routing-Key", binary_to_list(RoutingKeyBin)},
+					  {"X-AMQP-Routing-Key", RoutingKeyStr},
 					  {atom_to_list(MsgIdHeaderName), binary_to_list(MId)}, {atom_to_list(CorrIdHeaderName), binary_to_list(CId)}, 
-					  {"x-rabbithub-msg_header", MH} | ExtraHeaders]					  	  
+					  {"x-rabbithub-msg_header", MH} | ExtraHeaders1]					  	  
                                                 		        
           end, 
           
@@ -383,16 +397,25 @@ deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
           end,
           Sub = lists:nth(1, Subs),
           %% check if outbound authentication is configured and add appropriate headers
-          OutboundAuth = case Sub#rabbithub_lease.outbound_auth of
-             undefined -> [];
-             AuthVal -> [{"Authorization", "Basic " ++(AuthVal#rabbithub_outbound_auth.auth_config)#rabbithub_outbound_auth_basicauth_config.authorization}]
-          end,
-          %{'Authorization',"Basic Z3Vlc3Q6Z3Vlc3Q="},
+          ReadAuthFun = fun() ->
+              case  (AuthValList = mnesia:read({rabbithub_outbound_auth, Subscription})) =:= [] of
+                  true -> 
+                      [];
+                  false -> 
+                      AuthVal = lists:nth(1, AuthValList),
+                      [{"Authorization", "Basic " ++(AuthVal#rabbithub_outbound_auth.auth_config)#rabbithub_outbound_auth_basicauth_config.authorization}]
+              end
+          end, 
+                 
+          {atomic, OutboundAuth} = mnesia:transaction(ReadAuthFun),          
           
-          AllHeaders1 =   lists:append(AllHeaders, OutboundAuth),
-           
-           
-		   Payload = {URL, AllHeaders1, ContentType, PayloadBin},
+          AllHeaders1 = lists:append(AllHeaders, OutboundAuth),
+          
+          QueueNameHeader = [{"X-AMQP-Queue", QueueStr}],
+          AllHeaders2 = lists:append(AllHeaders1, QueueNameHeader),
+          ExchangeNameHeader = [{"X-AMQP-Exchange", ExchangeStr}],
+          AllHeaders3 = lists:append(AllHeaders2, ExchangeNameHeader),    
+		   Payload = {URL, AllHeaders3, ContentType, PayloadBin},
 						 
 		   % Log the request if the environment variable has been set - default
 		   % is not to log the request
@@ -402,6 +425,21 @@ deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
 				_ ->
 					ok
 		   end,
+		   
+		   case application:get_env(rabbithub, log_subscription_expiration) of
+               {ok, Days} ->
+		   	       DaysMicro = Days * 864000000,
+			       ExpireRange = DaysMicro + rabbithub_subscription:system_time(), 
+			       {Year, Month, Day} = microsec_to_date(Sub#rabbithub_lease.lease_expiry_time_microsec),
+			       case Sub#rabbithub_lease.lease_expiry_time_microsec of
+			           L1 when L1 < ExpireRange ->
+			               rabbit_log:warning("RabbitHub subscriber ~p~n will expire on ~p/~p/~p~n", [Sub, Month, Day, Year]);
+			           _ -> ok
+			       end;
+		        _ ->
+		            ok
+		   end,
+		   
 		   
            HttpReqOpts = case application:get_env(rabbithub, http_request_options) of
 				{ok, Opts} ->
@@ -455,12 +493,53 @@ deliver_via_post(Subscription = #rabbithub_subscription{callback = Callback},
                            timer:sleep(round(Delay));
                        _ -> ok
                    end                  
-           end,          
+           end,        
            HTTPResp;
    		   
         _ ->
             {error, invalid_callback_url, {}}
     end.
+    
+get_queue_exchange_and_routingkey(BasicMessage, QueueName) ->
+    Content = BasicMessage#basic_message.content,
+    Props = Content#content.properties,
+    Headers = Props#'P_basic'.headers,
+    XDeath = case Headers of
+        undefined -> false;
+        H -> lists:keyfind(<<"x-death">>, 1, H)
+    end,
+    case XDeath of
+        false ->
+            Ex = binary_to_list((BasicMessage#basic_message.exchange_name)#resource.name),
+            Rk = binary_to_list(lists:nth(1, BasicMessage#basic_message.routing_keys)),
+            Qu = binary_to_list(QueueName#resource.name),           
+            {Qu, Ex, Rk, 0};
+        _T -> 
+            Array = element(3, XDeath),
+            FindRejectedFun = fun ({table, Info}, Resp) -> 
+                case lists:keyfind(<<"rejected">>, 3, Info) of
+                    false -> 
+                        case Resp of
+                            undefined -> undefined;
+                            Val -> Val
+                        end;
+                    _Tuple ->  Info
+                end
+            end,
+            RetList = lists:foldl(FindRejectedFun, undefined, Array),
+            Queue = binary_to_list(element(3,lists:keyfind(<<"queue">>, 1, RetList))),
+            Exchange = binary_to_list(element(3,lists:keyfind(<<"exchange">>, 1, RetList))),
+            RoutingKey = binary_to_list(element(2, lists:nth(1, element(3,lists:keyfind(<<"routing-keys">>, 1, RetList))))),
+            Count = element(3,lists:keyfind(<<"count">>, 1, RetList)),
+            {Queue, Exchange, RoutingKey, Count }
+    end.    
+
+
+microsec_to_date(Microseconds) ->
+   BaseDate      = calendar:datetime_to_gregorian_seconds({{1970,1,1},{0,0,0}}),
+   Seconds       = BaseDate + (Microseconds div 1000000),
+   { Date,_Time} = calendar:gregorian_seconds_to_datetime(Seconds),
+   Date.
 
 error_and_delete_sub(Subscription, ErrorReport) ->
     rabbit_log:error("RabbitHub error~n~p~n", [ErrorReport]),

@@ -1,7 +1,7 @@
 -module(rabbithub_subscription).
 
 -export([start_subscriptions/0]).
--export([create/6, delete/1, deactivate/1]).
+-export([create/7, delete/1, deactivate/1]).
 -export([start_link/1]).
 -export([register_subscription_pid/3, erase_subscription_pid/1, delete_local_consumer/1]).
 
@@ -14,6 +14,10 @@
 -include_lib("rabbit_common/include/rabbit_framing.hrl").
 
 %% Should be exported by timer module, but isn't
+%this cannot be  used until on erlang 18+
+%system_time() -> 
+%    erlang:system_time(1000000).
+
 system_time() ->
     {MegaSec, Sec, MicroSec} = now(),
     1000000 * (MegaSec * 1000000 + Sec) + MicroSec.
@@ -34,7 +38,7 @@ start_subscriptions() ->
                            end),
     lists:foreach(fun start/1, Leases).
 
-create(Subscription, LeaseSeconds, HAMode, MaxTps, Status, OutboundAuth) ->
+create(Subscription, LeaseSeconds, HAMode, MaxTps, Status, OutboundAuth, ContactRec) ->
     rabbithub_consumer:erase_subscription_err(Subscription),
     RequestedExpiryTime = system_time() + LeaseSeconds * 1000000,    
     Lease = #rabbithub_lease{subscription = Subscription,
@@ -42,16 +46,15 @@ create(Subscription, LeaseSeconds, HAMode, MaxTps, Status, OutboundAuth) ->
                              lease_seconds = LeaseSeconds,
                              ha_mode = HAMode,
                              status = Status,
-                             max_tps = MaxTps,
-                             outbound_auth = OutboundAuth},
+                             max_tps = MaxTps},
                              
-                             
+                                     
     {atomic, Result} = mnesia:sync_transaction(
         fun () ->            
             case mnesia:read(rabbithub_lease, Subscription) of
                 [ExistingRecord] ->                
                     UpdatedRecord = ExistingRecord#rabbithub_lease{lease_expiry_time_microsec = RequestedExpiryTime, 
-                                        lease_seconds = LeaseSeconds, ha_mode = HAMode, status = Status, max_tps = MaxTps, outbound_auth = OutboundAuth },
+                                        lease_seconds = LeaseSeconds, ha_mode = HAMode, status = Status, max_tps = MaxTps},
                     {atomic, ok} = mnesia:transaction(fun () ->                         
                         ok = mnesia:write(UpdatedRecord) end),
                     UpdatedRecord;                        
@@ -60,8 +63,48 @@ create(Subscription, LeaseSeconds, HAMode, MaxTps, Status, OutboundAuth) ->
                     Lease                  
             end
         end),
-    start(Result).
+    {atomic, _ResultOA} = mnesia:sync_transaction(
+        fun() ->
+            case OutboundAuth of
+                [] -> check_and_delete_outbound_auth(Subscription);
+                undefined -> check_and_delete_outbound_auth(Subscription);                                    
+                OA -> %%write record
+                    {atomic, ok} = mnesia:transaction(fun () -> mnesia:write(OA) end),
+                    ok
+            end
+        end),
+    {atomic, _ResultC} = mnesia:sync_transaction(
+        fun() ->
+            case ContactRec of
+                [] -> check_and_delete_contact(Subscription, ContactRec);
+                undefined -> check_and_delete_contact(Subscription, ContactRec);                                    
+                C -> %%write record                    
+                    SubscriberContactInfo = #rabbithub_subscriber_contact_info{subscription = Subscription, contact_info = C},
+                    {atomic, ok} = mnesia:transaction(fun () -> mnesia:write(SubscriberContactInfo) end),
+                    ok
+            end
+        end),
     
+    start(Result).
+
+check_and_delete_outbound_auth(Subscription) ->    
+    mnesia:transaction(fun () ->
+        case mnesia:read(rabbithub_outbound_auth, Subscription) of
+            [] -> do_nothing;
+            [_ExistingRecord] ->  
+                mnesia:delete({rabbithub_outbound_auth, Subscription})
+        end
+    end).
+
+check_and_delete_contact(Subscription, Contact) ->    
+    mnesia:transaction(fun () ->
+        case mnesia:read(rabbithub_subscriber_contact_info, Subscription) of
+            [] -> do_nothing;
+            [_ExistingRecord2] ->  
+                mnesia:delete({rabbithub_subscriber_contact_info, Subscription})
+        end
+    end).
+
     
 %%GF changing unsubscription to set status to inactive instead of deleting from table
 deactivate(Subscription) ->
@@ -96,13 +139,13 @@ update_lease_status(Subscription, Status) ->
 
     mnesia:transaction(LeaseUpdateFun).
     
-update_lease_pseudo_queue(Subscription, Q) ->
-    LeaseUpdateFun = fun() ->
-        [L] = mnesia:read({rabbithub_lease, Subscription}),        
-        mnesia:write(L#rabbithub_lease{pseudo_queue = Q})
-    end,
-
-    mnesia:transaction(LeaseUpdateFun).
+%update_lease_pseudo_queue(Subscription, Q) ->
+%    LeaseUpdateFun = fun() ->
+%        [L] = mnesia:read({rabbithub_lease, Subscription}),        
+%        mnesia:write(L#rabbithub_lease{pseudo_queue = Q})
+%    end,
+%
+%    mnesia:transaction(LeaseUpdateFun).
 
 delete(Subscription) ->
     Consumer = #rabbithub_consumer{subscription = Subscription, node = node()},
@@ -112,7 +155,8 @@ delete(Subscription) ->
         {atomic, []} ->
             {error, not_found};       
         {atomic, [Lease]} ->
-            _R1 = mnesia:transaction(fun () -> mnesia:delete({rabbithub_lease, Subscription}) end),                    
+            _R1 = mnesia:transaction(fun () -> mnesia:delete({rabbithub_lease, Subscription}) end),
+            check_and_delete_outbound_auth(Subscription),            
             delete_local_consumer(Subscription, Lease),
             Lease;
         {aborted, Reason} -> 
@@ -128,17 +172,22 @@ delete(Subscription) ->
                 exchange ->
                     case application:get_env(rabbithub, use_internal_queue_for_pseudo_queue) of
                         {ok, false} ->
-                            %% if resource type = exchange and env = false, delete psuedo_queue            
-                            PseudoQueue = L2#rabbithub_lease.pseudo_queue,
-                            QueueName = PseudoQueue#amqqueue.name,        
-                            case rabbit_amqqueue:lookup(QueueName) of
-                                {error, not_found} ->
-                                    rabbit_log:info("RabbitHub error deleting Pseudo Queue ~p Reason not found.~nFor Subscription ~p~n", 
-                                        [QueueName,Subscription]);
-                                {ok, Q} ->
-                                    {ok, PurgedMessageCount} = rabbit_amqqueue:delete(Q, false, false),
-                                    rabbit_log:info("RabbitHub deleted pseudo queue ~p with ~p messages purged~n for Subscription ~p~n", 
-                                        [QueueName, PurgedMessageCount, Subscription])
+                            %% if resource type = exchange and env = false, and pseudo queue has been created, delete psuedo_queue            
+                            PseudoQueue = L2#rabbithub_lease.pseudo_queue,                            
+                            case PseudoQueue of
+                                undefined ->
+                                    ok;
+                                PQ ->
+                                    QueueName = PQ#amqqueue.name,        
+                                    case rabbit_amqqueue:lookup(QueueName) of
+                                        {error, not_found} ->
+                                            rabbit_log:info("RabbitHub error deleting Pseudo Queue ~p Reason not found.~nFor Subscription ~p~n", 
+                                                [QueueName,Subscription]);
+                                        {ok, Q} ->
+                                            {ok, PurgedMessageCount} = rabbit_amqqueue:delete(Q, false, false),
+                                            rabbit_log:info("RabbitHub deleted pseudo queue ~p with ~p messages purged~n for Subscription ~p~n", 
+                                                [QueueName, PurgedMessageCount, Subscription])
+                                    end
                             end,
                             ok;
                         %% If usings standard pseudo queue then do nothing, queue aleady deleted.    
