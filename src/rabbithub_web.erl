@@ -959,25 +959,35 @@ manage_validation(SubscriptionTuple, TableId) ->
     
     BatchRecord = case MissingParameters of
         none -> 
-            BatchRecordStatus = case Stat of
+            {CallStat, BatchRecordStatus} = case Stat of
                 active ->        
                     case do_validate(Callback, Topic, LeaseSeconds, subscribe, none, BasicAuth) of
                         ok -> 
-                            create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3, MaxTps2, BasicAuth, ContactRec1);
+                            ActiveResult = create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3, MaxTps2, BasicAuth, ContactRec1),
+                            {ok, ActiveResult};
                         {error, Reason} ->
                             ReasonString = lists:flatten(io_lib:format("~p", [{error, Reason}])),
                             ReasonString2 = re:replace(re:replace(ReasonString, "\n", "", [global,{return,list}]), "\s{2,}", " ", [global,{return,list}]),                           
-                            [{node(), list_to_binary(ReasonString2)}]        
+                            ErrorResult = [{node(), list_to_binary(ReasonString2)}],
+                            {error, ErrorResult}                                                             
                     end;
                 inactive -> %insert record but do not validate callback url        
-                    create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3, MaxTps2, BasicAuth, ContactRec1)
-            end,                            
-            {atomic, CurrentLeaseList} = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Subscription}) end),  
-            CurrentLease = lists:nth(1, CurrentLeaseList),
-                
-            BatchRecord1  = #rabbithub_batch{subscription = Subscription, 
-                                lease_expiry_time_microsec = CurrentLease#rabbithub_lease.lease_expiry_time_microsec, 
-                                status = BatchRecordStatus},
+                    InactiveResult = create_subscription(Callback, Topic, LeaseSeconds, Resource, Stat, HA3, MaxTps2, BasicAuth, ContactRec1),
+                    {ok, InactiveResult}
+            end,     
+
+            BatchRecord1 = case CallStat of
+                ok ->                                                
+                    {atomic, CurrentLeaseList} = mnesia:transaction(fun () -> mnesia:read({rabbithub_lease, Subscription}) end),  
+                    CurrentLease = lists:nth(1, CurrentLeaseList),                
+                    #rabbithub_batch{subscription = Subscription, 
+                                    lease_expiry_time_microsec = CurrentLease#rabbithub_lease.lease_expiry_time_microsec, 
+                                    status = BatchRecordStatus};
+                error -> 
+                    #rabbithub_batch{subscription = Subscription, 
+                                    lease_expiry_time_microsec = 0, 
+                                    status = BatchRecordStatus}
+            end,
             BatchRecord1;
         MissingParamterError -> 
              StatusMPE = [{node(), list_to_binary(lists:flatten(io_lib:format("~p", [{error, MissingParamterError}])))}],  
