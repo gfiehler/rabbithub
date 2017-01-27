@@ -1187,20 +1187,38 @@ perform_request('POST', subscriptions, '', none, _Resource, _ParsedQuery, Req) -
 
 %% GF: Updated to handle message headers for header exchange POSTs
 perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
-    MsgId = case application:get_env(rabbithub, set_message_id) of
-        {ok, _MsgIDHeaderName} -> 
-            rabbit_guid:binary(rabbit_guid:gen(), "rabbithub_msgid");
+    {MsgHdr ,MsgId} = case application:get_env(rabbithub, set_message_id) of
+        {ok, MsgIDHeaderName} -> 
+            {MsgIDHeaderName, rabbit_guid:binary(rabbit_guid:gen(), "rabbithub_msgid")};
         _ ->
-            undefined
+            {undefined, undefined}
     end,
-    CorrId =  case application:get_env(rabbithub, set_correlation_id) of
+    RespMsgHdr = case MsgId of 
+        undefined -> undefined;
+        Mid -> {atom_to_list(MsgHdr), binary_to_list(Mid)}
+    end,
+                                                 
+    {CorrHdr, CorrId} =  case application:get_env(rabbithub, set_correlation_id) of
         {ok, CorrIdHeaderName} -> 
             case Req:get_header_value(CorrIdHeaderName) of
-                undefined -> undefined;
-                HV -> list_to_binary(HV)
+                undefined -> {undefined, undefined};
+                HV -> {CorrIdHeaderName, list_to_binary(HV)}
             end;
         _ -> undefined
     end,         
+    RespCorrHdr = case CorrId of 
+        undefined -> undefined;
+        Cid -> {atom_to_list(CorrHdr), binary_to_list(Cid)}
+    end, 
+    
+    RespHeader = case RespMsgHdr of
+        undefined -> [];
+        RMH -> [RMH]
+    end,
+    RespHeader1 = case RespCorrHdr of
+        undefined -> RespHeader;
+        RCH -> lists:append(RespHeader, [RCH])
+    end,
     case application:get_env(rabbithub, log_published_messages) of        
         {ok, true} ->                        
             HeaderList2 = case application:get_env(rabbithub, log_http_headers) of
@@ -1216,6 +1234,7 @@ perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
             rabbit_log:info("RabbitHub:  Message Published for Resource ~p~n  Message Id: ~p~n  Correlation Id:  ~p~n  HTTP Headers: ~p~n  Msg Body:  ~p~n", [Resource, MsgId, CorrId, HeaderList2, BodyStr]);            
         _ -> do_nothing
     end,
+    
     case Req:get_header_value("x-rabbithub-msg_header") of
         %% no custom HTTP header for headers exchange, publish normal
         undefined ->            
@@ -1223,7 +1242,7 @@ perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
 	        Delivery = rabbit_basic:delivery(false, false, Msg, undefined),
 	        case rabbit_basic:publish(Delivery) of
 		        {ok,  _A} ->
-		            Req:respond({202, [], []});
+		            Req:respond({202, RespHeader1, []});
 		        {error, not_found} ->
 		            Req:respond({404, [], "exchange not found"})
 	        end;
@@ -1234,7 +1253,7 @@ perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
 	         Delivery = rabbit_basic:delivery(false, false, Msg, undefined),
 	         case rabbit_basic:publish(Delivery) of
 		     {ok,  _} ->
-	     	     Req:respond({202, [], []});
+	     	     Req:respond({202, RespHeader1, []});
 		     {error, not_found} ->
 		         Req:not_found()
 	         end
@@ -1242,20 +1261,39 @@ perform_request('POST', endpoint, '', exchange, Resource, ParsedQuery, Req) ->
 
 perform_request('POST', endpoint, '', queue, Resource, ParsedQuery, Req) ->
 
-    MsgId = case application:get_env(rabbithub, set_message_id) of
-        {ok, _MsgIDHeaderName} -> 
-            rabbit_guid:binary(rabbit_guid:gen(), "rabbithub_msgid");
+    {MsgHdr ,MsgId} = case application:get_env(rabbithub, set_message_id) of
+        {ok, MsgIDHeaderName} -> 
+            {MsgIDHeaderName, rabbit_guid:binary(rabbit_guid:gen(), "rabbithub_msgid")};
         _ ->
-            undefined
+            {undefined, undefined}
     end,
-    CorrId =  case application:get_env(rabbithub, set_correlation_id) of
+    RespMsgHdr = case MsgId of 
+        undefined -> undefined;
+        Mid -> {atom_to_list(MsgHdr), binary_to_list(Mid)}
+    end,
+                                                 
+    {CorrHdr, CorrId} =  case application:get_env(rabbithub, set_correlation_id) of
         {ok, CorrIdHeaderName} -> 
             case Req:get_header_value(CorrIdHeaderName) of
-                undefined -> undefined;
-                HV -> list_to_binary(HV)
+                undefined -> {undefined, undefined};
+                HV -> {CorrIdHeaderName, list_to_binary(HV)}
             end;
         _ -> undefined
-    end,            
+    end,         
+    RespCorrHdr = case CorrId of 
+        undefined -> undefined;
+        Cid -> {atom_to_list(CorrHdr), binary_to_list(Cid)}
+    end, 
+    
+    RespHeader = case RespMsgHdr of
+        undefined -> [];
+        RMH -> [RMH]
+    end,
+    RespHeader1 = case RespCorrHdr of
+        undefined -> RespHeader;
+        RCH -> lists:append(RespHeader, [RCH])
+    end,
+
     case application:get_env(rabbithub, log_published_messages) of        
         {ok, true} ->                        
             HeaderList2 = case application:get_env(rabbithub, log_http_headers) of
@@ -1277,7 +1315,7 @@ perform_request('POST', endpoint, '', queue, Resource, ParsedQuery, Req) ->
     case rabbit_amqqueue:lookup([Resource]) of
         [Queue] ->
             _QPids = rabbit_amqqueue:deliver([Queue], Delivery),
-            Req:respond({202, [], []});
+            Req:respond({202, RespHeader1, []});
         [] ->
             Req:not_found()
     end;
@@ -1404,7 +1442,7 @@ perform_request('POST', subscribe, '', ResourceTypeAtom, Resource, _ParsedQuery,
                      handle_request(ResourceTypeAtom, "subscribe", Resource, BodyQuery3, Req)
              catch
                  _:_ -> 
-                    Req:respond({400, [], "invalide json"})
+                    Req:respond({400, [], "invalid json"})
              end;
         _ -> 
             Req:respond({400, [], "Bad content-type; expected application/x-www-form-urlencoded"})
