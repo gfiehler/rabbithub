@@ -504,7 +504,7 @@ The file that was exported in the previous section can then be imported with the
 			"description": "my test app description"
 		}
 	}]
-}' --header "content-type:application/json" http://guest:guest@localhost:15670/subscriptions
+      }' --header "content-type:application/json" http://guest:guest@localhost:15670/subscriptions
 ```
 Both export and import are also available via the RabbitHub Management UI.
 
