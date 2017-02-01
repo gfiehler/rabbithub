@@ -67,7 +67,9 @@ rather than anything intrinsic in pubsub-over-webhooks.
 
 ### See Wiki for more detailed information
 Wiki Home:  https://github.com/gfiehler/rabbithub/wiki
+
 Wiki Administrators Guide:  https://github.com/gfiehler/rabbithub/wiki/RabbitHub-Administrators-Guide
+
 Wiki Users Guide:  https://github.com/gfiehler/rabbithub/wiki/RabbitHub-Users-Guide
 
 ## Installation
