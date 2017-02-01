@@ -66,7 +66,9 @@ an artifact of what Google's public PSHB instance is mailing out,
 rather than anything intrinsic in pubsub-over-webhooks.
 
 ### See Wiki for more detailed information
-https://github.com/gfiehler/rabbithub/wiki
+Wiki Home:  https://github.com/gfiehler/rabbithub/wiki
+Wiki Administrators Guide:  https://github.com/gfiehler/rabbithub/wiki/RabbitHub-Administrators-Guide
+Wiki Users Guide:  https://github.com/gfiehler/rabbithub/wiki/RabbitHub-Users-Guide
 
 ## Installation
 This release is for rabbitmq 3.6.6.  For prior versions of Rabbitmq please use the latest 3.6.3 branch.
