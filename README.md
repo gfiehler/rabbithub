@@ -65,6 +65,9 @@ Again, RabbitHub is content-agnostic, so the fact that Atom appears is
 an artifact of what Google's public PSHB instance is mailing out,
 rather than anything intrinsic in pubsub-over-webhooks.
 
+### See Wiki for more detailed information
+https://github.com/gfiehler/rabbithub/wiki
+
 ## Installation
 This release is for rabbitmq 3.6.6.  For prior versions of Rabbitmq please use the latest 3.6.3 branch.
 To install from source (requires Erlang R18.3 or higher due to SSL bugs in 17.x.):
