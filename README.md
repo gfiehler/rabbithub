@@ -464,7 +464,7 @@ The file that was exported in the previous section can then be imported with the
 
 <em>Note:  both import and export of subscribers requires a user with rabbitmq tags (roles)  `administrator,rabbithub_admin`</em>
 
-```javascript
+```
   curl -d '{
 	"subscriptions": [{
 		"vhost": "rhtest2",
