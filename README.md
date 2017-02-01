@@ -67,7 +67,7 @@ rather than anything intrinsic in pubsub-over-webhooks.
 
 ## Installation
 This release is for rabbitmq 3.6.6.  For prior versions of Rabbitmq please use the latest 3.6.3 branch.
-To install from source (requires Erlang R15B01 or higher):
+To install from source (requires Erlang R18.3 or higher due to SSL bugs in 17.x.):
 
     git clone https://github.com/brc859844/rabbithub
     cd rabbithub
@@ -140,17 +140,22 @@ A Unique Subscriber is defined by
 | hub.mode | 'subscribe' to create a new subscription, 'unsubscribe' to deactivate an existing subscription |
 | hub.topic | A filter for selecting a subset of messages |
 | hub.verify  | The subscription verification mode for this request (the value may be either “sync” or “async”). Refer to the PubSubHubBub specification for additional details. |
+| hub.callback | Callback url for the subscribers rest api. |
 | hub.lease_seconds | Subscriber-provided lease duration in seconds. After this time, the subscription will be terminated. The default lease is approximately 30 days, and the maximum lease is approximately 1000 years. Refer to the PubSubHubBub specification for additional information.  |
-| hub.persistmsg | true:  set Rabbitmq to persist this message, should be in conjunction with durable queues. |
 | hub.max_tps | Simple throttling mechanism to limit the Maximum Transactions Per Second that can be sent to a subscriber.  See Max TPS section for details |
 | hub.ha_mode | Ability to set HA Mode for a consumer for an individual subscription overriding the enviornment variable settings.  See High Availability Consumers section for details |
-| hub.expires | filters get all subscriptions to only suscriptions that will expire within *n* days |
 | hub.basic_auth | allows the setting of basic auth credentials for calling the subscriber.  The value must be the base64 of user:pass. |
 | hub.app_name | allows the setting of an application name for the subscriber. |
 | hub.contact_name | allows the setting of contact name for the subscriber. |
 | hub.phone | allows the setting of a phone number for the subscriber. |
 | hub.email | allows the setting of an email address for the subscriber. |
 | hub.description | allows the setting of a description for the subscriber. |
+
+### Other Options
+| Parameter  | Description  |
+| :--- |:---| 
+| hub.persistmsg | Used when Publishing a message.  true:  set Rabbitmq to persist this message, should be in conjunction with durable queues. |
+| hub.expires | Used when performing a GET subscriptions.  This filters get all subscriptions to only suscriptions that will expire within *n* days |
 
 ### Subscription Payloads
 Content-Type:  application/x-www-form-urlencoded<br>
