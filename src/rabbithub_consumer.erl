@@ -68,8 +68,9 @@ handle_call(Request, _From, State) ->
 
 handle_cast({deliver, _ConsumerTag, AckRequired,
              {QNameResource, QPid, MsgId, Redelivered, BasicMessage}},
-            State = #state{subscription = Subscription}) ->   
-                
+            State = #state{subscription = Subscription}) -> 
+              
+
     RESP = rabbithub:deliver_via_post(Subscription,
                                     BasicMessage,
                                     [{"X-AMQP-Redelivered", atom_to_list(Redelivered)}], QNameResource),
@@ -141,7 +142,7 @@ handle_cast({deliver, _ConsumerTag, AckRequired,
                                     case is_integer(Reason) of
                                         true -> 
                                             ok = rabbithub:error_and_unsub(Subscription,
-									                                        {rabbithub_consumer, http_post_failure, Reason, Content}),
+									                                        {rabbithub_consumer, "http_post_failure, error limit exceeded", Reason, Content}),
                                             ok;
                                         
                                         false ->
@@ -153,7 +154,7 @@ handle_cast({deliver, _ConsumerTag, AckRequired,
                                                     ok
                                             end,
 					                        ok = rabbithub:error_and_unsub(Subscription,
-									                                        {rabbithub_consumer, http_post_failure, Reason, Content})
+									                                        {rabbithub_consumer, "http_post_failure, error limit exceeded", Reason, Content})
 									end;
                                 do_not_unsubscribe -> 
                                    case application:get_env(rabbithub, requeue_on_http_post_error) of

@@ -546,7 +546,13 @@ error_and_delete_sub(Subscription, ErrorReport) ->
 	rabbithub_subscription:delete(Subscription).
 
 error_and_unsub(Subscription, ErrorReport) ->
-    rabbit_log:error("RabbitHub post error~n~p~n", [ErrorReport]),
+    {atomic, AppName} = mnesia:transaction(fun () ->
+         case mnesia:read(rabbithub_subscriber_contact_info, Subscription) of
+            [] -> application_unknown;
+            [Record] -> (Record#rabbithub_subscriber_contact_info.contact_info)#rabbithub_contact.app_name
+         end
+    end),
+    rabbit_log:error("RabbitHub Subscriber Deactivated.~nApplication: ~p~nSubscriber: ~p~nError: ~p~n", [AppName, Subscription, ErrorReport]),
 	%% If unsubscribe_on_http_post_error_limit and unsubscribe_on_http_post_error_timeout_milliseconds
 	%%  are set then unsubscribe_on_http_post_error is not allowed to override.
 	%%
@@ -557,13 +563,15 @@ error_and_unsub(Subscription, ErrorReport) ->
         {ok, ErrorLimit} when is_integer(ErrorLimit)->
             case application:get_env(rabbithub, unsubscribe_on_http_post_error_timeout_milliseconds) of
                 {ok, ErrorTimeout} when is_integer(ErrorTimeout)->  
-                    rabbithub_subscription:deactivate(Subscription);
+                   rabbithub_subscription:deactivate(Subscription),
+                   rabbithub_web:deactivate_ha_consumers(Subscription);
                 _ -> 
                     case application:get_env(rabbithub, unsubscribe_on_http_post_error) of
 		                {ok, false} ->
 			                ok;
 		                _ ->
-		                   rabbithub_subscription:deactivate(Subscription)
+		                  rabbithub_subscription:deactivate(Subscription),
+		                  rabbithub_web:deactivate_ha_consumers(Subscription)
 	                end
 	        end;
         _ ->
@@ -571,7 +579,8 @@ error_and_unsub(Subscription, ErrorReport) ->
 		        {ok, false} ->
 			        ok;
 		        _ ->
-		           rabbithub_subscription:deactivate(Subscription)
+		            rabbithub_subscription:deactivate(Subscription),
+		            rabbithub_web:deactivate_ha_consumers(Subscription)
 	        end
 	end,
     ok.

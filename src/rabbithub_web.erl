@@ -1,6 +1,6 @@
 -module(rabbithub_web).
 
--export([start/0, handle_req/1, listener/0]).
+-export([start/0, handle_req/1, listener/0, deactivate_ha_consumers/1]).
 
 -include("rabbithub.hrl").
 -include_lib("rabbit-common/include/rabbit.hrl").
